@@ -1,6 +1,8 @@
 package com.hl7decoder.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hl7decoder.api.dto.icd10.Icd10AutocompleteRequest;
 import com.hl7decoder.api.dto.icd10.Icd10ExportRequest;
 import com.hl7decoder.api.dto.icd10.Icd10SearchRequest;
@@ -12,11 +14,15 @@ import com.hl7decoder.model.icd10.Icd10SavedSearchResponse;
 import com.hl7decoder.model.icd10.Icd10SearchResponse;
 import com.hl7decoder.model.icd10.Icd10SearchResult;
 import com.hl7decoder.model.icd10.Icd10SelectedCode;
+import com.hl7decoder.persistence.SavedIcd10Search;
+import com.hl7decoder.persistence.SavedIcd10SearchRepository;
 import com.lowagie.text.Document;
 import com.lowagie.text.DocumentException;
 import com.lowagie.text.FontFactory;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.pdf.PdfWriter;
+import jakarta.persistence.EntityNotFoundException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -35,7 +41,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -76,13 +81,23 @@ public class Icd10Service {
 
     private final RestClient restClient;
     private final String apiBaseUrl;
+    private final SavedIcd10SearchRepository savedSearchRepository;
+    private final ObjectMapper objectMapper;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
-    private final Map<String, Icd10SavedSearchResponse> savedSearches = new ConcurrentHashMap<>();
 
+    @Autowired
     public Icd10Service(RestClient.Builder restClientBuilder,
+                        SavedIcd10SearchRepository savedSearchRepository,
+                        ObjectMapper objectMapper,
                         @Value("${app.icd10.api-base-url:https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search}") String apiBaseUrl) {
         this.restClient = restClientBuilder.build();
         this.apiBaseUrl = apiBaseUrl;
+        this.savedSearchRepository = savedSearchRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    Icd10Service(RestClient.Builder restClientBuilder, String apiBaseUrl) {
+        this(restClientBuilder, null, new ObjectMapper().findAndRegisterModules(), apiBaseUrl);
     }
 
     public Icd10SearchResponse search(Icd10SearchRequest request) {
@@ -94,7 +109,19 @@ public class Icd10Service {
                         needsMoreInformation(concept),
                         Boolean.FALSE.equals(request.includeClarifyingQuestions()) ? List.of() : clarifyingQuestions(concept),
                         Boolean.FALSE.equals(request.includeClarifyingQuestions()) ? List.of() : refinementSuggestions(concept),
+                        queryVariants(concept),
+                        0,
+                        0,
                         searchConcept(concept, limit)))
+                .map(group -> new Icd10DiagnosisGroup(
+                        group.diagnosisText(),
+                        group.needsMoreInformation(),
+                        group.clarifyingQuestions(),
+                        group.refinementSuggestions(),
+                        group.results().stream().map(Icd10SearchResult::queryTerm).distinct().toList(),
+                        (int) group.results().stream().filter(result -> !result.fallbackMatch()).count(),
+                        (int) group.results().stream().filter(Icd10SearchResult::fallbackMatch).count(),
+                        group.results()))
                 .toList();
         return new Icd10SearchResponse(
                 request.inputText().trim(),
@@ -128,27 +155,37 @@ public class Icd10Service {
     }
 
     public Icd10SavedSearchResponse save(Icd10SearchRequest request) {
+        ensureSavedSearchRepository();
         Icd10SearchResponse search = search(request);
-        Icd10SavedSearchResponse saved = new Icd10SavedSearchResponse(UUID.randomUUID().toString(), Instant.now().plus(SAVE_TTL), search);
-        savedSearches.put(saved.id(), saved);
-        return saved;
+        UUID id = UUID.randomUUID();
+        Instant expiresAt = Instant.now().plus(SAVE_TTL);
+        SavedIcd10Search saved = new SavedIcd10Search(id, Instant.now(), expiresAt, writeSearch(search));
+        savedSearchRepository.save(saved);
+        return new Icd10SavedSearchResponse(id.toString(), expiresAt, search);
     }
 
     public List<Icd10SavedSearchResponse> history() {
-        purgeExpiredSavedSearches();
-        return savedSearches.values().stream()
+        ensureSavedSearchRepository();
+        deleteExpiredSavedSearches();
+        return savedSearchRepository.findAll().stream()
+                .map(this::savedResponse)
                 .sorted(Comparator.comparing(Icd10SavedSearchResponse::expiresAt).reversed())
                 .toList();
     }
 
     public Icd10SavedSearchResponse saved(String id) {
-        purgeExpiredSavedSearches();
-        return Optional.ofNullable(savedSearches.get(id))
-                .orElseThrow(() -> new jakarta.persistence.EntityNotFoundException("Saved ICD-10 search not found."));
+        ensureSavedSearchRepository();
+        deleteExpiredSavedSearches();
+        UUID uuid = UUID.fromString(id);
+        SavedIcd10Search saved = savedSearchRepository.findById(uuid)
+                .filter(search -> search.getExpiresAt().isAfter(Instant.now()))
+                .orElseThrow(() -> new EntityNotFoundException("Saved ICD-10 search not found."));
+        return savedResponse(saved);
     }
 
     public void deleteSaved(String id) {
-        savedSearches.remove(id);
+        ensureSavedSearchRepository();
+        savedSearchRepository.deleteById(UUID.fromString(id));
     }
 
     public byte[] exportJson(Icd10ExportRequest request) {
@@ -186,6 +223,16 @@ public class Icd10Service {
                 }
                 json.append("\n    {\"diagnosisText\": ").append(jsonString(group.diagnosisText()))
                         .append(", \"needsMoreInformation\": ").append(group.needsMoreInformation())
+                        .append(", \"queryTerms\": [");
+                for (int j = 0; j < group.queryTerms().size(); j++) {
+                    if (j > 0) {
+                        json.append(',');
+                    }
+                    json.append(jsonString(group.queryTerms().get(j)));
+                }
+                json.append("]")
+                        .append(", \"exactMatchCount\": ").append(group.exactMatchCount())
+                        .append(", \"fallbackMatchCount\": ").append(group.fallbackMatchCount())
                         .append(", \"refinementSuggestions\": [");
                 for (int j = 0; j < group.refinementSuggestions().size(); j++) {
                     if (j > 0) {
@@ -206,7 +253,10 @@ public class Icd10Service {
                             .append(", \"score\": ").append(result.score())
                             .append(", \"matchPercentage\": ").append(result.matchPercentage())
                             .append(", \"billable\": ").append(result.billable())
-                            .append(", \"chapter\": ").append(jsonString(result.chapter())).append('}');
+                            .append(", \"chapter\": ").append(jsonString(result.chapter()))
+                            .append(", \"queryTerm\": ").append(jsonString(result.queryTerm()))
+                            .append(", \"fallbackMatch\": ").append(result.fallbackMatch())
+                            .append(", \"source\": ").append(jsonString(result.source())).append('}');
                 }
                 json.append("]}");
             }
@@ -221,7 +271,7 @@ public class Icd10Service {
 
     public byte[] exportCsv(Icd10ExportRequest request) {
         List<Icd10SelectedCode> selectedCodes = request.selectedCodes() == null ? List.of() : request.selectedCodes();
-        StringBuilder csv = new StringBuilder("diagnosisText,code,description,longDescription,rank,score,matchPercentage,billable,chapter\n");
+        StringBuilder csv = new StringBuilder("diagnosisText,code,description,longDescription,rank,score,matchPercentage,billable,chapter,queryTerm,fallbackMatch,source\n");
         if (Boolean.TRUE.equals(request.selectedOnly())) {
             for (Icd10SelectedCode code : selectedCodes) {
                 csv.append(escape("selected")).append(',')
@@ -230,7 +280,9 @@ public class Icd10Service {
                         .append(escape(code.longDescription())).append(',')
                         .append(',').append(',').append(',')
                         .append(Boolean.TRUE.equals(code.billable())).append(',')
-                        .append(escape(code.chapter())).append('\n');
+                        .append(escape(code.chapter())).append(',')
+                        .append(',').append(',').append(',')
+                        .append('\n');
             }
         } else {
             Icd10SearchResponse search = search(new Icd10SearchRequest(request.inputText(), request.resultLimit(), true, false));
@@ -244,7 +296,10 @@ public class Icd10Service {
                             .append(result.score()).append(',')
                             .append(result.matchPercentage()).append(',')
                             .append(result.billable()).append(',')
-                            .append(escape(result.chapter())).append('\n');
+                            .append(escape(result.chapter())).append(',')
+                            .append(escape(result.queryTerm())).append(',')
+                            .append(result.fallbackMatch()).append(',')
+                            .append(escape(result.source())).append('\n');
                 }
             }
         }
@@ -267,7 +322,11 @@ public class Icd10Service {
                 for (Icd10SearchResult result : group.results()) {
                     text.append(result.rank()).append(". ").append(result.code()).append(" - ")
                             .append(result.longDescription()).append(" (")
-                            .append(result.matchPercentage()).append("% match)\n");
+                            .append(result.matchPercentage()).append("% match");
+                    if (result.fallbackMatch()) {
+                        text.append(", fallback: ").append(result.queryTerm());
+                    }
+                    text.append(")\n");
                 }
                 text.append('\n');
             }
@@ -300,7 +359,8 @@ public class Icd10Service {
                     document.add(new Paragraph("Diagnosis: " + group.diagnosisText(), FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12)));
                     for (Icd10SearchResult result : group.results()) {
                         document.add(new Paragraph(result.rank() + ". " + result.code() + " - " + result.longDescription()
-                                + " | Match: " + result.matchPercentage() + "% | Billable: " + result.billable()));
+                                + " | Match: " + result.matchPercentage() + "% | Query: " + result.queryTerm()
+                                + " | Fallback: " + result.fallbackMatch() + " | Billable: " + result.billable()));
                     }
                 }
             }
@@ -340,7 +400,7 @@ public class Icd10Service {
         }
 
         if (merged.isEmpty() && lastFailure != null) {
-            throw new IllegalStateException("ICD-10 search is temporarily unavailable. Please refine the diagnosis text and try again.", lastFailure);
+            throw new Icd10LookupException("ICD-10 search is temporarily unavailable. Please refine the diagnosis text and try again.", lastFailure);
         }
 
         List<Icd10SearchResult> results = rerank(merged.values().stream().limit(limit).toList());
@@ -397,15 +457,23 @@ public class Icd10Service {
                     matchPercentage(score),
                     isLikelyBillable(code),
                     chapter(code),
-                    matchReason(originalConcept, queryConcept, description)));
+                    matchReason(originalConcept, queryConcept, description),
+                    queryConcept,
+                    !originalConcept.equals(queryConcept),
+                    "NLM Clinical Tables ICD-10-CM"));
         }
         return results;
     }
 
     private List<Icd10SearchResult> rerank(List<Icd10SearchResult> results) {
         List<Icd10SearchResult> reranked = new ArrayList<>();
-        for (int i = 0; i < results.size(); i++) {
-            Icd10SearchResult result = results.get(i);
+        List<Icd10SearchResult> ranked = results.stream()
+                .sorted(Comparator.comparing(Icd10SearchResult::score).reversed()
+                        .thenComparing(Icd10SearchResult::fallbackMatch)
+                        .thenComparing(Icd10SearchResult::rank))
+                .toList();
+        for (int i = 0; i < ranked.size(); i++) {
+            Icd10SearchResult result = ranked.get(i);
             reranked.add(new Icd10SearchResult(
                     result.code(),
                     result.shortDescription(),
@@ -415,7 +483,10 @@ public class Icd10Service {
                     result.matchPercentage(),
                     result.billable(),
                     result.chapter(),
-                    result.matchReason()));
+                    result.matchReason(),
+                    result.queryTerm(),
+                    result.fallbackMatch(),
+                    result.source()));
         }
         return reranked;
     }
@@ -583,7 +654,24 @@ public class Icd10Service {
     private double adjustedScore(String originalConcept, String queryConcept, String description, int rank, double scorePenalty) {
         double originalScore = score(originalConcept, description, rank);
         double queryScore = score(queryConcept, description, rank) * scorePenalty;
-        return Math.round(Math.max(originalScore, queryScore) * 100.0) / 100.0;
+        double siteBoost = bodySiteOverlap(originalConcept, description) ? 0.08 : 0.0;
+        double broadPainPenalty = isBroadPainResult(originalConcept, description) ? 0.14 : 0.0;
+        double adjusted = Math.max(originalScore, queryScore) + siteBoost - broadPainPenalty;
+        return Math.round(Math.max(0.0, Math.min(1.0, adjusted)) * 100.0) / 100.0;
+    }
+
+    private boolean bodySiteOverlap(String concept, String description) {
+        String normalizedDescription = normalize(description);
+        return List.of("knee", "ankle", "shoulder", "hip", "wrist", "hand", "foot", "back", "chest", "abdomen", "eye", "ear")
+                .stream()
+                .anyMatch(site -> concept.matches(".*\\b" + site + "\\b.*") && normalizedDescription.matches(".*\\b" + site + "\\b.*"));
+    }
+
+    private boolean isBroadPainResult(String concept, String description) {
+        String normalizedDescription = normalize(description);
+        return concept.contains("pain")
+                && !bodySiteOverlap(concept, normalizedDescription)
+                && normalizedDescription.matches(".*\\b(chronic pain|acute pain|pain syndrome)\\b.*");
     }
 
     private int matchPercentage(double score) {
@@ -647,9 +735,34 @@ public class Icd10Service {
         }
     }
 
-    private void purgeExpiredSavedSearches() {
-        Instant now = Instant.now();
-        savedSearches.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
+    private void deleteExpiredSavedSearches() {
+        ensureSavedSearchRepository();
+        savedSearchRepository.deleteAll(savedSearchRepository.findByExpiresAtBefore(Instant.now()));
+    }
+
+    private Icd10SavedSearchResponse savedResponse(SavedIcd10Search saved) {
+        try {
+            return new Icd10SavedSearchResponse(
+                    saved.getId().toString(),
+                    saved.getExpiresAt(),
+                    objectMapper.readValue(saved.getSearchJson(), Icd10SearchResponse.class));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Saved ICD-10 search could not be decoded", ex);
+        }
+    }
+
+    private String writeSearch(Icd10SearchResponse search) {
+        try {
+            return objectMapper.writeValueAsString(search);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("ICD-10 search could not be serialized", ex);
+        }
+    }
+
+    private void ensureSavedSearchRepository() {
+        if (savedSearchRepository == null) {
+            throw new IllegalStateException("Saved ICD-10 search repository is not configured.");
+        }
     }
 
     private String escape(String value) {

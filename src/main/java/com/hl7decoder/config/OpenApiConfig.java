@@ -10,7 +10,7 @@ public class OpenApiConfig {
     @Bean
     OpenAPI hl7OpenApi() {
         return new OpenAPI().info(new Info()
-                .title("HL7 Decoder API")
+                .title("Healthcare Hero API")
                 .version("0.1.0")
                 .description("REST API for HL7 parsing, validation, decoding, exports, and anonymous saved validations."));
     }

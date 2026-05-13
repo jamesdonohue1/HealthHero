@@ -1,5 +1,6 @@
 package com.hl7decoder.config;
 
+import com.hl7decoder.service.Icd10LookupException;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -26,6 +27,13 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     ProblemDetail illegalState(IllegalStateException ex) {
         ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+        detail.setDetail(ex.getMessage());
+        return detail;
+    }
+
+    @ExceptionHandler(Icd10LookupException.class)
+    ProblemDetail icd10Lookup(Icd10LookupException ex) {
+        ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.SERVICE_UNAVAILABLE);
         detail.setDetail(ex.getMessage());
         return detail;
     }

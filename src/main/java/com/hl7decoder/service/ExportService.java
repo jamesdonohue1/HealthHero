@@ -1,6 +1,7 @@
 package com.hl7decoder.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.hl7decoder.api.dto.ExportRequest;
@@ -21,11 +22,15 @@ import java.nio.charset.StandardCharsets;
 public class ExportService {
     private final Hl7Service hl7Service;
     private final ObjectMapper objectMapper;
-    private final XmlMapper xmlMapper = new XmlMapper();
+    private final XmlMapper xmlMapper;
 
     public ExportService(Hl7Service hl7Service, ObjectMapper objectMapper) {
         this.hl7Service = hl7Service;
         this.objectMapper = objectMapper;
+        this.xmlMapper = XmlMapper.builder()
+                .findAndAddModules()
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .build();
     }
 
     public byte[] exportJson(ExportRequest request) {
