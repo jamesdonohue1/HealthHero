@@ -4,6 +4,7 @@ import com.hl7decoder.service.Icd10LookupException;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -34,6 +35,13 @@ public class ApiExceptionHandler {
     @ExceptionHandler(Icd10LookupException.class)
     ProblemDetail icd10Lookup(Icd10LookupException ex) {
         ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.SERVICE_UNAVAILABLE);
+        detail.setDetail(ex.getMessage());
+        return detail;
+    }
+
+    @ExceptionHandler(BadCredentialsException.class)
+    ProblemDetail badCredentials(BadCredentialsException ex) {
+        ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
         detail.setDetail(ex.getMessage());
         return detail;
     }

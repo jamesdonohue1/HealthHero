@@ -8,4 +8,6 @@ import java.util.UUID;
 
 public interface SavedValidationRepository extends JpaRepository<SavedValidation, UUID> {
     List<SavedValidation> findByExpiresAtBefore(Instant now);
+
+    java.util.Optional<SavedValidation> findByIdAndOrganizationId(UUID id, UUID organizationId);
 }

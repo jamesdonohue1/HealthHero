@@ -21,6 +21,8 @@ public class SavedIcd10Search {
     @Column(nullable = false)
     private Instant expiresAt;
 
+    private UUID organizationId;
+
     @Lob
     @Column(nullable = false)
     private String searchJson;
@@ -29,9 +31,14 @@ public class SavedIcd10Search {
     }
 
     public SavedIcd10Search(UUID id, Instant createdAt, Instant expiresAt, String searchJson) {
+        this(id, createdAt, expiresAt, null, searchJson);
+    }
+
+    public SavedIcd10Search(UUID id, Instant createdAt, Instant expiresAt, UUID organizationId, String searchJson) {
         this.id = id;
         this.createdAt = createdAt;
         this.expiresAt = expiresAt;
+        this.organizationId = organizationId;
         this.searchJson = searchJson;
     }
 
@@ -45,6 +52,10 @@ public class SavedIcd10Search {
 
     public Instant getExpiresAt() {
         return expiresAt;
+    }
+
+    public UUID getOrganizationId() {
+        return organizationId;
     }
 
     public String getSearchJson() {

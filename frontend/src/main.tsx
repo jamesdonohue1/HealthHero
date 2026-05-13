@@ -19,6 +19,16 @@ import './styles.css';
 type ValidationMode = 'STRICT' | 'STANDARD' | 'LENIENT';
 type Severity = 'ERROR' | 'WARNING' | 'INFO';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+let authToken = window.localStorage.getItem('healthcareHeroToken') ?? '';
+
+function setGlobalAuthToken(token: string) {
+  authToken = token;
+  if (token) {
+    window.localStorage.setItem('healthcareHeroToken', token);
+  } else {
+    window.localStorage.removeItem('healthcareHeroToken');
+  }
+}
 
 type ValidationIssue = {
   severity: Severity;
@@ -111,7 +121,30 @@ type Icd10RefineResponse = {
   clarifyingQuestions: string[];
 };
 
-type ModuleName = 'landing' | 'hl7' | 'icd10' | 'tools';
+type ModuleName = 'landing' | 'hl7' | 'icd10' | 'cpt' | 'tools';
+type AuthView = 'login' | 'register' | 'reset' | 'account' | '';
+
+type AuthUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  organizationId: string;
+  organizationName: string;
+  roles: string[];
+};
+
+type AuthResponse = {
+  token: string;
+  expiresAt: string;
+  user: AuthUser;
+  capabilities: string[];
+};
+
+type ApiKeyResponse = {
+  id: string;
+  name: string;
+  apiKey: string;
+};
 
 type Hl7RepairResponse = {
   originalMessage: string;
@@ -150,6 +183,41 @@ type MedicalNecessityResponse = {
 };
 
 type GenericPlatformResponse = Record<string, unknown>;
+
+type ProcedureSearchResult = {
+  code: string;
+  type: string;
+  description: string;
+  longDescription: string;
+  category: string;
+  confidence: number;
+  active: boolean;
+  effectiveDate: string | null;
+  terminationDate: string | null;
+  source: string;
+  matchReason: string;
+};
+
+type ProcedureSearchResponse = {
+  query: string;
+  searchedAt: string;
+  licensingNotice: string;
+  results: ProcedureSearchResult[];
+};
+
+type IcdCptMatchResult = {
+  diagnosisText: string;
+  diagnosisCode: string;
+  procedureText: string;
+  procedureCode: string;
+  payer: string;
+  status: string;
+  confidence: number;
+  reason: string;
+  warnings: string[];
+  recommendations: string[];
+  modifierSuggestions: { modifier: string; reason: string; required: boolean }[];
+};
 
 const sampleMessage = `MSH|^~\\&|LAB|HOSP|EHR|CLINIC|20260101123000||ORU^R01|MSG00001|P|2.5.1
 PID|1||12345^^^HOSP^MR||DOE^JANE||19800101|F
@@ -209,6 +277,10 @@ const theme = createTheme({
 
 function App() {
   const [module, setModule] = React.useState<ModuleName>('landing');
+  const [currentUser, setCurrentUser] = React.useState<AuthUser | null>(null);
+  const [authView, setAuthView] = React.useState<AuthView>('');
+  const [authError, setAuthError] = React.useState('');
+  const [apiKey, setApiKey] = React.useState('');
   const [message, setMessage] = React.useState(sampleMessage);
   const [mode, setMode] = React.useState<ValidationMode>('STANDARD');
   const [result, setResult] = React.useState<Hl7Result | null>(null);
@@ -231,6 +303,18 @@ function App() {
     void parse();
   }, []);
 
+  React.useEffect(() => {
+    if (!authToken) {
+      return;
+    }
+    getJson<AuthResponse>('/api/auth/me')
+      .then((response) => setCurrentUser(response.user))
+      .catch(() => {
+        setGlobalAuthToken('');
+        setCurrentUser(null);
+      });
+  }, []);
+
   async function parse() {
     setStatus('Validating...');
     setError('');
@@ -246,6 +330,9 @@ function App() {
   }
 
   async function saveValidation() {
+    if (!requireAuth()) {
+      return;
+    }
     setStatus('Saving...');
     setError('');
     try {
@@ -262,7 +349,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/exports/${format}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify({ message, mode })
       });
       if (!response.ok) {
@@ -293,6 +380,34 @@ function App() {
     }
   }
 
+  function requireAuth() {
+    if (currentUser) {
+      return true;
+    }
+    setAuthError('Please log in to save work or view account data.');
+    setAuthView('login');
+    return false;
+  }
+
+  function applyAuth(response: AuthResponse) {
+    setGlobalAuthToken(response.token);
+    setCurrentUser(response.user);
+    setAuthView('');
+    setAuthError('');
+  }
+
+  async function logout() {
+    try {
+      await postJson('/api/auth/logout', {});
+    } catch {
+      // Local logout still clears the bearer token.
+    }
+    setGlobalAuthToken('');
+    setCurrentUser(null);
+    setApiKey('');
+    setAuthView('');
+  }
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -306,10 +421,48 @@ function App() {
           <Tabs value={module} onChange={(_, next) => setModule(next)}>
             <Tab value="hl7" label="HL7" />
             <Tab value="icd10" label="ICD-10" />
+            <Tab value="cpt" label="CPT/HCPCS" />
             <Tab value="tools" label="Tools" />
           </Tabs>
           <Button variant="outlined" startIcon={<HomeIcon />} onClick={() => setModule('landing')}>Solutions</Button>
-          {module === 'hl7' && <Box className="toolbar">
+          <Box className="auth-actions">
+            {currentUser ? (
+              <>
+                <Chip size="small" label={`${currentUser.displayName} | ${currentUser.organizationName}`} />
+                <Button variant="outlined" onClick={() => setAuthView('account')}>Account</Button>
+                <Button variant="outlined" onClick={logout}>Logout</Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outlined" onClick={() => setAuthView('login')}>Login</Button>
+                <Button variant="contained" onClick={() => setAuthView('register')}>Create account</Button>
+              </>
+            )}
+          </Box>
+        </Box>
+
+        <Alert severity="warning" className="phi-alert">Do not submit real PHI unless authorized to do so.</Alert>
+        {authView && (
+          <AuthPanel
+            view={authView}
+            setView={setAuthView}
+            currentUser={currentUser}
+            error={authError}
+            setError={setAuthError}
+            onAuthenticated={applyAuth}
+            onUserUpdate={(user) => setCurrentUser(user)}
+            apiKey={apiKey}
+            setApiKey={setApiKey}
+          />
+        )}
+
+        <Box className={`module-view ${module === 'hl7' ? 'active' : ''}`}>
+        <Box className="hl7-module-head">
+          <Box>
+            <Typography variant="h6" fontWeight={800}>HL7 Decoder</Typography>
+            {status && <Typography variant="caption" color="text.secondary">{status}</Typography>}
+          </Box>
+          <Box className="toolbar">
             <FormControl size="small">
               <InputLabel>Mode</InputLabel>
               <Select label="Mode" value={mode} onChange={(event) => setMode(event.target.value as ValidationMode)}>
@@ -322,12 +475,9 @@ function App() {
             <Tooltip title="Save this validation for 24 hours">
               <Button variant="outlined" onClick={saveValidation} startIcon={<SaveIcon />}>Save</Button>
             </Tooltip>
-          </Box>}
+          </Box>
         </Box>
-
-        <Alert severity="warning" className="phi-alert">Do not submit real PHI unless authorized to do so.</Alert>
-
-        {module === 'icd10' ? <Icd10Module /> : module === 'tools' ? <PlatformToolsModule /> : <Box className="workspace">
+        <Box className="workspace">
           <Box className="editor-pane">
             <Box className="pane-head">
               <Typography variant="subtitle1" fontWeight={700}>Raw HL7</Typography>
@@ -351,7 +501,6 @@ function App() {
             <Box className="pane-head">
               <Box>
                 <Typography variant="subtitle1" fontWeight={700}>Decoded Output</Typography>
-                {status && <Typography variant="caption" color="text.secondary">{status}</Typography>}
               </Box>
               <Box className="export-row">
                 {(['json', 'xml', 'pdf', 'hl7', 'csv'] as const).map((format) => (
@@ -385,7 +534,17 @@ function App() {
               {tab === 3 && result && <IssueList issues={result.issues} onSelect={focusIssue} selectedLocation={selectedLocation} />}
             </Box>
           </Box>
-        </Box>}
+        </Box>
+        </Box>
+        <Box className={`module-view ${module === 'icd10' ? 'active' : ''}`}>
+          <Icd10Module requireAuth={requireAuth} />
+        </Box>
+        <Box className={`module-view ${module === 'cpt' ? 'active' : ''}`}>
+          <CptModule />
+        </Box>
+        <Box className={`module-view ${module === 'tools' ? 'active' : ''}`}>
+          <PlatformToolsModule />
+        </Box>
       </Box>
       )}
     </ThemeProvider>
@@ -401,6 +560,7 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
           <Box className="landing-nav-actions">
             <Button color="inherit" onClick={() => onSelect('hl7')}>HL7</Button>
             <Button color="inherit" onClick={() => onSelect('icd10')}>ICD-10</Button>
+            <Button color="inherit" onClick={() => onSelect('cpt')}>CPT</Button>
             <Button color="inherit" onClick={() => onSelect('tools')}>Tools</Button>
           </Box>
         </Box>
@@ -410,6 +570,7 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
           <Box className="landing-actions">
             <Button size="large" variant="contained" startIcon={<HubIcon />} onClick={() => onSelect('hl7')}>Open HL7 Decoder</Button>
             <Button size="large" variant="outlined" color="inherit" startIcon={<LocalOfferIcon />} onClick={() => onSelect('icd10')}>Open ICD-10 Search</Button>
+            <Button size="large" variant="outlined" color="inherit" startIcon={<LocalOfferIcon />} onClick={() => onSelect('cpt')}>Open CPT Search</Button>
             <Button size="large" variant="outlined" color="inherit" startIcon={<SearchIcon />} onClick={() => onSelect('tools')}>Open Platform Tools</Button>
           </Box>
         </Box>
@@ -438,7 +599,158 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
               <small>Repair HL7, convert FHIR, generate test data, decode X12, and check medical necessity.</small>
             </span>
           </button>
+          <button type="button" className="solution-card" onClick={() => onSelect('cpt')}>
+            <span className="solution-icon"><LocalOfferIcon /></span>
+            <span>
+              <strong>CPT/HCPCS Search</strong>
+              <small>Find procedure-code candidates and cross-check ICD/CPT claim readiness.</small>
+            </span>
+          </button>
         </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function AuthPanel({
+  view,
+  setView,
+  currentUser,
+  error,
+  setError,
+  onAuthenticated,
+  onUserUpdate,
+  apiKey,
+  setApiKey
+}: {
+  view: AuthView;
+  setView: (view: AuthView) => void;
+  currentUser: AuthUser | null;
+  error: string;
+  setError: (error: string) => void;
+  onAuthenticated: (response: AuthResponse) => void;
+  onUserUpdate: (user: AuthUser) => void;
+  apiKey: string;
+  setApiKey: (key: string) => void;
+}) {
+  const [email, setEmail] = React.useState(currentUser?.email ?? '');
+  const [password, setPassword] = React.useState('');
+  const [displayName, setDisplayName] = React.useState(currentUser?.displayName ?? '');
+  const [organizationName, setOrganizationName] = React.useState(currentUser?.organizationName ?? 'Healthcare Hero');
+  const [apiKeyName, setApiKeyName] = React.useState('Default API key');
+  const [status, setStatus] = React.useState('');
+
+  React.useEffect(() => {
+    setEmail(currentUser?.email ?? email);
+    setDisplayName(currentUser?.displayName ?? displayName);
+    setOrganizationName(currentUser?.organizationName ?? organizationName);
+  }, [currentUser]);
+
+  async function submitAuth(path: string, body: unknown) {
+    setStatus('Working...');
+    setError('');
+    try {
+      onAuthenticated(await postJson<AuthResponse>(path, body));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Authentication request failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function updateAccount() {
+    setStatus('Saving account...');
+    setError('');
+    try {
+      const response = await patchJson<AuthResponse>('/api/auth/me', { displayName });
+      onUserUpdate(response.user);
+      setStatus('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Account update failed.');
+      setStatus('');
+    }
+  }
+
+  async function createApiKey() {
+    setStatus('Creating API key...');
+    setError('');
+    try {
+      const response = await postJson<ApiKeyResponse>('/api/auth/api-keys', { name: apiKeyName });
+      setApiKey(response.apiKey);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'API key creation failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  return (
+    <Box className="auth-panel">
+      <Box className="pane-head">
+        <Box>
+          <Typography variant="subtitle1" fontWeight={800}>
+            {view === 'login' && 'Login'}
+            {view === 'register' && 'Create Account'}
+            {view === 'reset' && 'Password Reset'}
+            {view === 'account' && 'Account Settings'}
+          </Typography>
+          {status && <Typography variant="caption" color="text.secondary">{status}</Typography>}
+        </Box>
+        <Button size="small" variant="outlined" onClick={() => { setView(''); setError(''); }}>Close</Button>
+      </Box>
+      <Box className="auth-panel-body">
+        {error && <Alert severity="error">{error}</Alert>}
+        {view !== 'account' && (
+          <>
+            <label>Email <input value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+            <label>Password <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          </>
+        )}
+        {view === 'register' && (
+          <>
+            <label>Name <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+            <label>Organization <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} /></label>
+          </>
+        )}
+        {view === 'account' && currentUser && (
+          <>
+            <Alert severity="info">Roles: {currentUser.roles.join(', ')}</Alert>
+            <label>Name <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+            <label>Email <input value={currentUser.email} disabled /></label>
+            <label>Organization <input value={currentUser.organizationName} disabled /></label>
+            <Box className="tool-button-row">
+              <Button variant="contained" onClick={updateAccount}>Save account</Button>
+            </Box>
+            <Divider />
+            <label>API key name <input value={apiKeyName} onChange={(event) => setApiKeyName(event.target.value)} /></label>
+            <Box className="tool-button-row">
+              <Button variant="outlined" onClick={createApiKey}>Create API key</Button>
+            </Box>
+            {apiKey && <Alert severity="warning">Copy this API key now: <code>{apiKey}</code></Alert>}
+          </>
+        )}
+        {view === 'login' && (
+          <Box className="tool-button-row">
+            <Button variant="contained" onClick={() => submitAuth('/api/auth/login', { email, password })}>Login</Button>
+            <Button variant="outlined" onClick={() => setView('reset')}>Forgot password</Button>
+            <Button variant="outlined" onClick={() => setView('register')}>Create account</Button>
+          </Box>
+        )}
+        {view === 'register' && (
+          <Box className="tool-button-row">
+            <Button variant="contained" onClick={() => submitAuth('/api/auth/register', { email, password, displayName, organizationName })}>Create account</Button>
+            <Button variant="outlined" onClick={() => setView('login')}>Login</Button>
+          </Box>
+        )}
+        {view === 'reset' && (
+          <>
+            <Alert severity="warning">MVP reset updates the password directly after email entry. Add email-token verification before production use.</Alert>
+            <Box className="tool-button-row">
+              <Button variant="contained" onClick={() => submitAuth('/api/auth/password-reset', { email, newPassword: password })}>Reset password</Button>
+              <Button variant="outlined" onClick={() => setView('login')}>Back to login</Button>
+            </Box>
+          </>
+        )}
       </Box>
     </Box>
   );
@@ -533,7 +845,7 @@ function IssueList({ issues, onSelect, selectedLocation }: { issues: ValidationI
   );
 }
 
-function Icd10Module() {
+function Icd10Module({ requireAuth }: { requireAuth: () => boolean }) {
   const [inputText, setInputText] = React.useState('patient has chronic left knee pain and shortness of breath');
   const [result, setResult] = React.useState<Icd10Response | null>(null);
   const [status, setStatus] = React.useState('');
@@ -588,6 +900,9 @@ function Icd10Module() {
   }
 
   async function saveSearch() {
+    if (!requireAuth()) {
+      return;
+    }
     setStatus('Saving ICD-10 search...');
     setError('');
     try {
@@ -630,7 +945,7 @@ function Icd10Module() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/icd10/export/${format}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify({ inputText, resultLimit: 10, selectedCodes, selectedOnly })
       });
       if (!response.ok) {
@@ -878,6 +1193,199 @@ function Icd10Module() {
             </Button>
           ))}
         </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function CptModule() {
+  const [procedureQuery, setProcedureQuery] = React.useState('chest x-ray 2 views');
+  const [searchResult, setSearchResult] = React.useState<ProcedureSearchResponse | null>(null);
+  const [diagnosisText, setDiagnosisText] = React.useState('cough');
+  const [icd10Code, setIcd10Code] = React.useState('R05.9');
+  const [procedureText, setProcedureText] = React.useState('chest x-ray 2 views');
+  const [procedureCode, setProcedureCode] = React.useState('71046');
+  const [payer, setPayer] = React.useState('Medicare');
+  const [compatibility, setCompatibility] = React.useState<IcdCptMatchResult | null>(null);
+  const [status, setStatus] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [copiedText, setCopiedText] = React.useState('');
+
+  React.useEffect(() => {
+    const query = procedureQuery.trim();
+    if (query.length < 3) {
+      setSearchResult(null);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void search(query);
+    }, 550);
+    return () => window.clearTimeout(timeout);
+  }, [procedureQuery]);
+
+  async function search(query = procedureQuery) {
+    setStatus('Searching CPT/HCPCS...');
+    setError('');
+    try {
+      const params = new URLSearchParams({ q: query, limit: '10' });
+      setSearchResult(await getJson<ProcedureSearchResponse>(`/api/cpt/search?${params.toString()}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'CPT/HCPCS search failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function checkCompatibility() {
+    setStatus('Checking ICD/CPT compatibility...');
+    setError('');
+    try {
+      setCompatibility(await postJson<IcdCptMatchResult>('/api/coding/compatibility', {
+        diagnosisText,
+        icd10Code,
+        procedureText,
+        procedureCode,
+        payer
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Compatibility check failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function copyText(text: string) {
+    await navigator.clipboard.writeText(text);
+    setCopiedText(text);
+    window.setTimeout(() => {
+      setCopiedText((current) => current === text ? '' : current);
+    }, 1400);
+  }
+
+  function useProcedure(result: ProcedureSearchResult) {
+    setProcedureCode(result.code);
+    setProcedureText(result.description);
+  }
+
+  function clearCompatibilityCheck() {
+    setDiagnosisText('');
+    setIcd10Code('');
+    setProcedureText('');
+    setProcedureCode('');
+    setPayer('');
+    setCompatibility(null);
+    setError('');
+    setStatus('');
+  }
+
+  return (
+    <Box className="cpt-workspace">
+      <Box className="cpt-main">
+        <Box className="icd10-input-panel">
+          <Box className="pane-head">
+            <Box>
+              <Typography variant="subtitle1" fontWeight={700}>CPT/HCPCS Procedure Search</Typography>
+              {status && <Typography variant="caption" color="text.secondary">{status}</Typography>}
+            </Box>
+            <Box className="toolbar">
+              <Button variant="contained" onClick={() => search()} startIcon={<SearchIcon />}>Search</Button>
+              <Button variant="outlined" onClick={() => { setProcedureQuery(''); setSearchResult(null); }} startIcon={<ClearAllIcon />}>Clear</Button>
+            </Box>
+          </Box>
+          <textarea
+            className="icd10-textarea"
+            value={procedureQuery}
+            onChange={(event) => setProcedureQuery(event.target.value)}
+            placeholder="Enter procedure text, HCPCS, CPT, modifier, or range such as 71045-71046"
+          />
+          <Box className="sample-row">
+            {['chest x-ray 2 views', 'knee xray 3 views', 'A1c', '93000', '71045-71046'].map((sample) => (
+              <Button key={sample} size="small" variant="outlined" onClick={() => setProcedureQuery(sample)}>{sample}</Button>
+            ))}
+          </Box>
+        </Box>
+
+        {error && <Alert severity="error">{error}</Alert>}
+        {searchResult && <Alert severity="warning">{searchResult.licensingNotice}</Alert>}
+        {searchResult && (
+          <Box className="icd10-results">
+            {searchResult.results.length === 0 ? <Alert severity="warning">No CPT/HCPCS matches found.</Alert> : searchResult.results.map((item) => (
+              <details className="icd10-result" key={item.code}>
+                <summary>
+                  <span className="result-code-cell">
+                    <span className="result-code">{item.code}</span>
+                    <Tooltip title={`Copy ${item.code}`}>
+                      <Button size="small" variant="outlined" className="copy-code-button" startIcon={copiedText === item.code ? <CheckIcon /> : <ContentCopyIcon />} onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        copyText(item.code);
+                      }}>
+                        {copiedText === item.code ? 'Copied' : 'Copy'}
+                      </Button>
+                    </Tooltip>
+                  </span>
+                  <span className="result-description">{item.description}</span>
+                  <Box className="result-badges">
+                    <Chip size="small" color="info" variant="outlined" label={`${item.confidence}%`} />
+                    <Chip size="small" variant="outlined" label={item.type} />
+                    <Chip size="small" variant="outlined" label={item.active ? 'Active' : 'Retired/deleted'} />
+                  </Box>
+                </summary>
+                <Box className="result-detail">
+                  <Typography variant="body2"><strong>Long description:</strong> {item.longDescription}</Typography>
+                  <Typography variant="body2"><strong>Category:</strong> {item.category}</Typography>
+                  <Typography variant="body2"><strong>Effective:</strong> {item.effectiveDate || 'n/a'} {item.terminationDate ? `through ${item.terminationDate}` : ''}</Typography>
+                  <Typography variant="body2"><strong>Source:</strong> {item.source}</Typography>
+                  <Typography variant="body2"><strong>Match reason:</strong> {item.matchReason}</Typography>
+                  <Box className="result-actions">
+                    <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => useProcedure(item)}>Use in check</Button>
+                    <Button size="small" variant="outlined" startIcon={copiedText === item.longDescription ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(item.longDescription)}>
+                      {copiedText === item.longDescription ? 'Copied' : 'Copy description'}
+                    </Button>
+                  </Box>
+                </Box>
+              </details>
+            ))}
+          </Box>
+        )}
+      </Box>
+
+      <Box className="selected-panel cpt-check-panel">
+        <Box className="pane-head">
+          <Typography variant="subtitle1" fontWeight={700}>ICD/CPT Check</Typography>
+          <Box className="tool-button-row">
+            <Button size="small" variant="outlined" onClick={clearCompatibilityCheck} startIcon={<ClearAllIcon />}>Clear</Button>
+            <Button size="small" variant="contained" onClick={checkCompatibility}>Check</Button>
+          </Box>
+        </Box>
+        <Box className="tool-form-row cpt-check-form">
+          <label>Diagnosis text <input value={diagnosisText} onChange={(event) => setDiagnosisText(event.target.value)} /></label>
+          <label>ICD-10 <input value={icd10Code} onChange={(event) => setIcd10Code(event.target.value)} /></label>
+          <label>Procedure text <input value={procedureText} onChange={(event) => setProcedureText(event.target.value)} /></label>
+          <label>CPT/HCPCS <input value={procedureCode} onChange={(event) => setProcedureCode(event.target.value)} /></label>
+          <label>Payer <input value={payer} onChange={(event) => setPayer(event.target.value)} /></label>
+        </Box>
+        {compatibility && (
+          <Box className="tool-output">
+            <Box className="tool-output-head">
+              <Chip color={compatibility.status === 'SUPPORTED' ? 'success' : compatibility.status === 'LIKELY_DENIAL' ? 'error' : 'warning'} label={compatibility.status.replace(/_/g, ' ')} />
+              <Chip label={`${Math.round(compatibility.confidence * 100)}% confidence`} />
+            </Box>
+            <Typography variant="body2">{compatibility.reason}</Typography>
+            {[...compatibility.warnings, ...compatibility.recommendations].length > 0 && (
+              <ul className="compact-list">
+                {[...compatibility.warnings, ...compatibility.recommendations].map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            )}
+            {compatibility.modifierSuggestions.length > 0 && (
+              <Box className="result-badges">
+                {compatibility.modifierSuggestions.map((modifier) => (
+                  <Chip key={modifier.modifier} label={`${modifier.modifier}: ${modifier.required ? 'Required' : 'Consider'}`} variant="outlined" />
+                ))}
+              </Box>
+            )}
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -1179,7 +1687,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<App />);
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify(body)
   });
   if (!response.ok) {
@@ -1190,6 +1698,38 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     throw new Error(`Expected JSON from ${path}, but received ${contentType || 'no content type'}. Check that the API is running and the frontend proxy is configured.`);
   }
   return response.json() as Promise<T>;
+}
+
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'PATCH',
+    headers: jsonHeaders(),
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response));
+  }
+  return response.json() as Promise<T>;
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: authHeaders() });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response));
+  }
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Expected JSON from ${path}, but received ${contentType || 'no content type'}.`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function authHeaders(): Record<string, string> {
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+function jsonHeaders(): Record<string, string> {
+  return { 'Content-Type': 'application/json', ...authHeaders() };
 }
 
 async function errorMessage(response: Response) {

@@ -7,6 +7,7 @@ import com.hl7decoder.model.icd10.Icd10AutocompleteResponse;
 import com.hl7decoder.model.icd10.Icd10RefineResponse;
 import com.hl7decoder.model.icd10.Icd10SavedSearchResponse;
 import com.hl7decoder.model.icd10.Icd10SearchResponse;
+import com.hl7decoder.security.AuthenticatedPrincipal;
 import com.hl7decoder.service.Icd10Service;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -14,6 +15,7 @@ import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -58,23 +60,23 @@ public class Icd10Controller {
     }
 
     @PostMapping("/save")
-    public Icd10SavedSearchResponse save(@Valid @RequestBody Icd10SearchRequest request) {
-        return icd10Service.save(request);
+    public Icd10SavedSearchResponse save(@Valid @RequestBody Icd10SearchRequest request, @AuthenticationPrincipal AuthenticatedPrincipal principal) {
+        return icd10Service.save(request, principal.organizationId());
     }
 
     @GetMapping("/history")
-    public List<Icd10SavedSearchResponse> history() {
-        return icd10Service.history();
+    public List<Icd10SavedSearchResponse> history(@AuthenticationPrincipal AuthenticatedPrincipal principal) {
+        return icd10Service.history(principal.organizationId());
     }
 
     @GetMapping("/saved/{id}")
-    public Icd10SavedSearchResponse saved(@PathVariable String id) {
-        return icd10Service.saved(id);
+    public Icd10SavedSearchResponse saved(@PathVariable String id, @AuthenticationPrincipal AuthenticatedPrincipal principal) {
+        return icd10Service.saved(id, principal.organizationId());
     }
 
     @DeleteMapping("/saved/{id}")
-    public ResponseEntity<Void> deleteSaved(@PathVariable String id) {
-        icd10Service.deleteSaved(id);
+    public ResponseEntity<Void> deleteSaved(@PathVariable String id, @AuthenticationPrincipal AuthenticatedPrincipal principal) {
+        icd10Service.deleteSaved(id, principal.organizationId());
         return ResponseEntity.noContent().build();
     }
 
