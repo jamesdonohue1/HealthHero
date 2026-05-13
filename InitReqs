@@ -1,0 +1,377 @@
+HL7 Validation & Decoding SaaS – Requirements Specification
+Project Overview
+
+Build a modern web-based HL7 validation and decoding SaaS platform focused on healthcare integration debugging, QA validation, and HL7 message analysis.
+
+The platform should support HL7 v2.5+ messages and provide:
+
+HL7 parsing
+message decoding
+structural validation
+export capabilities
+developer-friendly visualization
+future SaaS scalability
+
+Primary product identity:
+
+Healthcare integration debugging suite
+Healthcare QA platform
+Core Goals
+
+The application should:
+
+Parse HL7 v2.5+ messages
+Decode messages into human-readable structures
+Validate message structure and required fields
+Provide detailed error reporting
+Support healthcare integration engineers and QA teams
+Be scalable into a commercial SaaS platform
+Support future enterprise features
+Supported HL7 Versions
+
+Initial support:
+
+HL7 v2.5
+HL7 v2.5.1
+HL7 v2.6+
+Future version extensibility
+Supported Message Types
+
+Initial supported message types:
+
+ADT
+ORM
+ORU
+SIU
+DFT
+MDM
+BAR
+VXU
+MFN
+Custom Z-segments
+Custom Z-Segment Support
+
+Initial implementation:
+
+Parse Z-segments generically
+Display all Z-segment fields dynamically
+Preserve field/component hierarchy
+
+Future enhancement:
+
+User-defined Z-segment profiles
+Custom field definitions
+Vendor-specific validation profiles
+Validation Behavior
+
+Validation strictness must be configurable:
+
+Supported modes:
+
+Strict
+Standard
+Lenient
+
+Validation engine should detect:
+
+Missing required segments
+Missing required fields
+Invalid field datatypes
+Invalid timestamps
+Invalid delimiters
+Malformed composite fields
+Invalid segment ordering
+Unsupported HL7 versions
+Unknown segments
+Invalid message structures
+Invalid repeating fields
+
+Validation severities:
+
+Error
+Warning
+Info
+
+Each validation issue should include:
+
+Severity
+Segment location
+Field/component location
+Description
+Suggested fix
+User Interface Requirements
+Main Layout
+
+Primary interface layout:
+
+Raw HL7 editor on left
+Decoded/parsed output on right
+
+Right-side decoded panel should support:
+
+Expandable segment tree
+Table/grid view
+JSON viewer
+UI Features
+
+Users must be able to:
+
+Click fields for definitions/tooltips
+Search segments and fields
+View HL7 datatype information
+View required/optional status
+View repeatability/cardinality
+View color-coded validation issues
+Syntax Highlighting
+
+HL7 editor should support:
+
+Segment highlighting
+Delimiter highlighting
+Validation highlighting
+Error highlighting
+Warning highlighting
+Message Metadata Extraction
+
+Automatically extract and display:
+
+HL7 version
+Message type
+Trigger event
+Sending application
+Sending facility
+Receiving application
+Receiving facility
+Timestamp
+Control ID
+Processing ID
+Export Features
+
+Supported export formats:
+
+JSON
+XML
+PDF validation report
+Pretty-formatted HL7
+CSV
+Validation Reports
+
+PDF validation reports must include:
+
+Message metadata
+Validation summary
+Error/warning counts
+Validation issue details
+Segment/field locations
+Suggested fixes
+Raw HL7 message
+Decoded summary
+Message Saving Behavior
+Anonymous Users
+
+Default behavior:
+
+Messages are NOT saved automatically
+
+Optional behavior:
+
+User may click “Save this validation”
+
+Saved anonymous messages:
+
+Expire automatically after 24 hours
+Future Authenticated Users
+
+Future authenticated users should support:
+
+Persistent saved messages
+Manual deletion
+Validation history
+Team sharing
+Organization accounts
+SaaS Subscription Model
+
+Planned tiers:
+
+Free
+Pro
+Enterprise
+Potential Paid Features
+
+Paid features may include:
+
+Batch validation
+Larger message limits
+Validation history
+Team accounts
+API access
+PDF exports
+Custom validation profiles
+Long-term message retention
+Technology Stack
+Backend
+Java 21
+Spring Boot
+Maven
+Spring Web
+Spring Validation
+Spring Security (future-ready)
+JPA/Hibernate
+PostgreSQL
+HAPI HL7 library
+Frontend
+React
+TypeScript
+Modern responsive UI
+Component-based architecture
+
+Recommended UI libraries:
+
+Material UI or Ant Design
+Monaco Editor or CodeMirror
+API Documentation
+
+Use:
+
+Swagger/OpenAPI
+
+Provide interactive API documentation.
+
+REST API Requirements
+
+Provide REST endpoints for:
+
+Parse HL7
+Validate HL7
+Convert HL7 → JSON
+Convert HL7 → XML
+Export validation reports
+Save validations
+Retrieve validations
+
+Future support:
+
+API keys
+Rate limiting
+Usage quotas
+Security Requirements
+
+The system must:
+
+Display PHI warning messages
+Avoid logging HL7 payload contents
+Support encrypted saved messages
+Allow message deletion
+Prepare for future PHI redaction support
+
+Recommended warning:
+
+“Do not submit real PHI unless authorized to do so.”
+
+Logging Requirements
+
+Application logs must NOT store:
+
+Full HL7 payloads
+Patient identifiers
+Sensitive message contents
+
+Only store:
+
+Validation metadata
+System errors
+Request metrics
+Authentication Architecture
+
+Current MVP:
+
+Anonymous usage
+
+Future-ready architecture:
+
+JWT authentication
+Spring Security integration
+OAuth capability
+Google login capability
+Microsoft login capability
+Database Requirements
+
+Use PostgreSQL.
+
+Suggested tables:
+
+validations
+validation_results
+users
+organizations
+api_keys
+audit_logs
+saved_messages
+Deployment Requirements
+
+Project should include:
+
+Dockerfile
+docker-compose
+Environment-based configuration
+GitHub Actions CI/CD pipeline
+
+Deployment-ready for:
+
+AWS
+Azure
+Kubernetes
+Local Docker deployment
+Environment Configuration
+
+Support profiles:
+
+local
+dev
+test
+prod
+
+Use environment variables for:
+
+database credentials
+JWT secrets
+API keys
+encryption keys
+Performance Requirements
+
+The system should:
+
+Parse messages under 2 seconds
+Handle large HL7 payloads
+Support concurrent users
+Avoid UI freezing during parsing
+Future Enhancements
+
+Future roadmap features:
+
+AI-assisted validation explanations
+Suggested fixes
+HL7 → FHIR mapping
+JSON → HL7 generation
+Sample message generation
+Custom validation profiles
+Batch processing
+Vendor-specific profile packs
+Audit dashboards
+Team collaboration
+Recommended Initial MVP Scope
+
+MVP should include:
+
+Paste HL7 message
+Parse and decode
+Validate message
+Display structured output
+Display validation issues
+Export JSON/XML/PDF
+Anonymous save with expiration
+REST API
+Docker deployment
+Swagger docs
+
+Focus on shipping a functional developer-focused healthcare integration tool first before advanced SaaS features.

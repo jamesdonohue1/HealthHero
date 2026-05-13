@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: hl7-decoder
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/hl7decoder}
+    username: ${DATABASE_USERNAME:hl7decoder}
+    password: ${DATABASE_PASSWORD:hl7decoder}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: ${PORT:8080}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  encryption-key: ${ENCRYPTION_KEY:local-dev-key-change-me}
+  saved-message-cleanup-ms: ${SAVED_MESSAGE_CLEANUP_MS:3600000}
+  icd10:
+    api-base-url: ${ICD10_API_BASE_URL:https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search}
+
+logging:
+  level:
+    root: INFO
+    com.hl7decoder: INFO

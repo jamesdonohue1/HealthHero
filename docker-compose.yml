@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: hl7decoder
+      POSTGRES_USER: hl7decoder
+      POSTGRES_PASSWORD: hl7decoder
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    depends_on:
+      - postgres
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      DATABASE_URL: jdbc:postgresql://postgres:5432/hl7decoder
+      DATABASE_USERNAME: hl7decoder
+      DATABASE_PASSWORD: hl7decoder
+      ENCRYPTION_KEY: change-me-before-prod
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:
