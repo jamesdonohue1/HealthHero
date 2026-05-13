@@ -6,6 +6,7 @@ public record Icd10SearchResult(
         String longDescription,
         int rank,
         double score,
+        int matchPercentage,
         boolean billable,
         String chapter,
         String matchReason

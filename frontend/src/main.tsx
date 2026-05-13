@@ -62,6 +62,7 @@ type Icd10Result = {
   longDescription: string;
   rank: number;
   score: number;
+  matchPercentage?: number;
   billable: boolean;
   chapter: string;
   matchReason: string;
@@ -71,6 +72,7 @@ type Icd10Group = {
   diagnosisText: string;
   needsMoreInformation: boolean;
   clarifyingQuestions: string[];
+  refinementSuggestions?: string[];
   results: Icd10Result[];
 };
 
@@ -436,15 +438,20 @@ function Icd10Module() {
   const [selectedCodes, setSelectedCodes] = React.useState<Icd10SelectedCode[]>([]);
 
   async function search() {
+    await runSearch(inputText);
+  }
+
+  async function runSearch(nextInputText: string) {
     setStatus('Searching ICD-10-CM...');
     setError('');
     try {
       const next = await postJson<Icd10Response>('/api/icd10/search', {
-        inputText,
+        inputText: nextInputText,
         resultLimit: 10,
         includeClarifyingQuestions: true,
         includeAiRefinement: true
       });
+      setInputText(nextInputText);
       setResult(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'ICD-10 search failed.');
@@ -516,6 +523,10 @@ function Icd10Module() {
     await navigator.clipboard.writeText(text);
   }
 
+  function matchLabel(item: Icd10Result) {
+    return `Match ${item.matchPercentage ?? Math.round(item.score * 100)}%`;
+  }
+
   return (
     <Box className="icd10-workspace">
       <Box className="icd10-main">
@@ -570,6 +581,19 @@ function Icd10Module() {
                     <ul>
                       {group.clarifyingQuestions.map((question) => <li key={question}>{question}</li>)}
                     </ul>
+                    {group.refinementSuggestions && group.refinementSuggestions.length > 0 && (
+                      <Box className="refinement-list">
+                        {group.refinementSuggestions.map((suggestion) => (
+                          <Chip
+                            key={suggestion}
+                            size="small"
+                            label={suggestion}
+                            clickable
+                            onClick={() => runSearch(suggestion)}
+                          />
+                        ))}
+                      </Box>
+                    )}
                   </Alert>
                 )}
                 {group.results.length === 0 ? (
@@ -577,9 +601,26 @@ function Icd10Module() {
                 ) : group.results.map((item) => (
                   <details className="icd10-result" key={item.code}>
                     <summary>
-                      <span className="result-code">{item.code}</span>
+                      <span className="result-code-cell">
+                        <span className="result-code">{item.code}</span>
+                        <Tooltip title={`Copy ${item.code}`}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            className="copy-code-button"
+                            startIcon={<ContentCopyIcon />}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              copyText(item.code);
+                            }}
+                          >
+                            Copy
+                          </Button>
+                        </Tooltip>
+                      </span>
                       <span>{item.shortDescription}</span>
-                      <Chip size="small" label={`Score ${item.score}`} />
+                      <Chip size="small" color="info" variant="outlined" label={matchLabel(item)} />
                       <Chip size="small" variant="outlined" label={item.billable ? 'Billable' : 'Non-billable'} />
                     </summary>
                     <Box className="result-detail">

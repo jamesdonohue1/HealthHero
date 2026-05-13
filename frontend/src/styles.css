@@ -258,6 +258,13 @@ body {
   padding-left: 18px;
 }
 
+.refinement-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .icd10-result {
   margin-top: 8px;
   overflow: hidden;
@@ -266,8 +273,8 @@ body {
 .icd10-result summary {
   cursor: pointer;
   display: grid;
-  grid-template-columns: 92px minmax(160px, 1fr) auto auto;
-  gap: 10px;
+  grid-template-columns: minmax(158px, max-content) minmax(180px, 1fr) auto auto;
+  gap: 14px;
   align-items: center;
   padding: 11px 12px;
 }
@@ -275,6 +282,20 @@ body {
 .result-code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-weight: 800;
+}
+
+.result-code-cell {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copy-code-button {
+  flex: 0 0 auto;
+  min-width: 64px;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .result-detail {

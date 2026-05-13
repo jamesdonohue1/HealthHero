@@ -6,6 +6,7 @@ public record Icd10DiagnosisGroup(
         String diagnosisText,
         boolean needsMoreInformation,
         List<String> clarifyingQuestions,
+        List<String> refinementSuggestions,
         List<Icd10SearchResult> results
 ) {
 }

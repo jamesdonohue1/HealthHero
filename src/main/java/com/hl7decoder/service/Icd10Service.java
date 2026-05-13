@@ -31,10 +31,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
@@ -45,6 +47,7 @@ public class Icd10Service {
 
     private static final int DEFAULT_LIMIT = 10;
     private static final int MAX_LIMIT = 25;
+    private static final double FALLBACK_SCORE_PENALTY = 0.9;
     private static final Duration CACHE_TTL = Duration.ofHours(6);
     private static final Duration SAVE_TTL = Duration.ofHours(24);
     private static final Pattern PUNCTUATION = Pattern.compile("[\\p{Punct}&&[^/\\-\\n]]+");
@@ -90,6 +93,7 @@ public class Icd10Service {
                         concept,
                         needsMoreInformation(concept),
                         Boolean.FALSE.equals(request.includeClarifyingQuestions()) ? List.of() : clarifyingQuestions(concept),
+                        Boolean.FALSE.equals(request.includeClarifyingQuestions()) ? List.of() : refinementSuggestions(concept),
                         searchConcept(concept, limit)))
                 .toList();
         return new Icd10SearchResponse(
@@ -182,6 +186,14 @@ public class Icd10Service {
                 }
                 json.append("\n    {\"diagnosisText\": ").append(jsonString(group.diagnosisText()))
                         .append(", \"needsMoreInformation\": ").append(group.needsMoreInformation())
+                        .append(", \"refinementSuggestions\": [");
+                for (int j = 0; j < group.refinementSuggestions().size(); j++) {
+                    if (j > 0) {
+                        json.append(',');
+                    }
+                    json.append(jsonString(group.refinementSuggestions().get(j)));
+                }
+                json.append("]")
                         .append(", \"results\": [");
                 for (int j = 0; j < group.results().size(); j++) {
                     Icd10SearchResult result = group.results().get(j);
@@ -192,6 +204,7 @@ public class Icd10Service {
                             .append(", \"longDescription\": ").append(jsonString(result.longDescription()))
                             .append(", \"rank\": ").append(result.rank())
                             .append(", \"score\": ").append(result.score())
+                            .append(", \"matchPercentage\": ").append(result.matchPercentage())
                             .append(", \"billable\": ").append(result.billable())
                             .append(", \"chapter\": ").append(jsonString(result.chapter())).append('}');
                 }
@@ -208,14 +221,14 @@ public class Icd10Service {
 
     public byte[] exportCsv(Icd10ExportRequest request) {
         List<Icd10SelectedCode> selectedCodes = request.selectedCodes() == null ? List.of() : request.selectedCodes();
-        StringBuilder csv = new StringBuilder("diagnosisText,code,description,longDescription,rank,score,billable,chapter\n");
+        StringBuilder csv = new StringBuilder("diagnosisText,code,description,longDescription,rank,score,matchPercentage,billable,chapter\n");
         if (Boolean.TRUE.equals(request.selectedOnly())) {
             for (Icd10SelectedCode code : selectedCodes) {
                 csv.append(escape("selected")).append(',')
                         .append(escape(code.code())).append(',')
                         .append(escape(code.description())).append(',')
                         .append(escape(code.longDescription())).append(',')
-                        .append(',').append(',')
+                        .append(',').append(',').append(',')
                         .append(Boolean.TRUE.equals(code.billable())).append(',')
                         .append(escape(code.chapter())).append('\n');
             }
@@ -229,6 +242,7 @@ public class Icd10Service {
                             .append(escape(result.longDescription())).append(',')
                             .append(result.rank()).append(',')
                             .append(result.score()).append(',')
+                            .append(result.matchPercentage()).append(',')
                             .append(result.billable()).append(',')
                             .append(escape(result.chapter())).append('\n');
                 }
@@ -252,8 +266,8 @@ public class Icd10Service {
                 text.append(group.diagnosisText()).append('\n');
                 for (Icd10SearchResult result : group.results()) {
                     text.append(result.rank()).append(". ").append(result.code()).append(" - ")
-                            .append(result.longDescription()).append(" (score ")
-                            .append(result.score()).append(")\n");
+                            .append(result.longDescription()).append(" (")
+                            .append(result.matchPercentage()).append("% match)\n");
                 }
                 text.append('\n');
             }
@@ -286,7 +300,7 @@ public class Icd10Service {
                     document.add(new Paragraph("Diagnosis: " + group.diagnosisText(), FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12)));
                     for (Icd10SearchResult result : group.results()) {
                         document.add(new Paragraph(result.rank() + ". " + result.code() + " - " + result.longDescription()
-                                + " | Score: " + result.score() + " | Billable: " + result.billable()));
+                                + " | Match: " + result.matchPercentage() + "% | Billable: " + result.billable()));
                     }
                 }
             }
@@ -301,28 +315,57 @@ public class Icd10Service {
         if (concept.length() < 3) {
             return List.of();
         }
-        String key = concept + "|" + limit + "|nlm-v3|code-name";
+        String key = concept + "|" + limit + "|nlm-v3|code-name|fallback-v1";
         CacheEntry cached = cache.get(key);
         if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
             return cached.results();
         }
+
+        Map<String, Icd10SearchResult> merged = new LinkedHashMap<>();
+        RuntimeException lastFailure = null;
+        List<String> variants = queryVariants(concept);
+        for (int i = 0; i < variants.size() && merged.size() < limit; i++) {
+            String query = variants.get(i);
+            double penalty = i == 0 ? 1.0 : Math.max(0.72, FALLBACK_SCORE_PENALTY - ((i - 1) * 0.05));
+            try {
+                for (Icd10SearchResult result : searchApiConcept(concept, query, limit, penalty)) {
+                    merged.putIfAbsent(result.code(), result);
+                    if (merged.size() >= limit) {
+                        break;
+                    }
+                }
+            } catch (RuntimeException ex) {
+                lastFailure = ex;
+            }
+        }
+
+        if (merged.isEmpty() && lastFailure != null) {
+            throw new IllegalStateException("ICD-10 search is temporarily unavailable. Please refine the diagnosis text and try again.", lastFailure);
+        }
+
+        List<Icd10SearchResult> results = rerank(merged.values().stream().limit(limit).toList());
+        cache.put(key, new CacheEntry(Instant.now().plus(CACHE_TTL), results));
+        return results;
+    }
+
+    private List<Icd10SearchResult> searchApiConcept(String originalConcept, String queryConcept, int limit, double scorePenalty) {
         RuntimeException lastFailure = null;
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
                 JsonNode response = restClient.get()
-                        .uri(apiBaseUrl, uri -> icd10Uri(uri, concept, limit))
+                        .uri(apiBaseUrl, uri -> icd10Uri(uri, queryConcept, limit))
                         .accept(MediaType.APPLICATION_JSON)
                         .retrieve()
                         .body(JsonNode.class);
-                List<Icd10SearchResult> results = parseNlmResponse(concept, response);
-                cache.put(key, new CacheEntry(Instant.now().plus(CACHE_TTL), results));
-                return results;
+                return parseNlmResponse(originalConcept, queryConcept, response, scorePenalty);
             } catch (RuntimeException ex) {
                 lastFailure = ex;
                 backoff(attempt);
             }
         }
-        throw new IllegalStateException("ICD-10 search is temporarily unavailable. Please refine the diagnosis text and try again.", lastFailure);
+        throw lastFailure == null
+                ? new IllegalStateException("ICD-10 search is temporarily unavailable.")
+                : lastFailure;
     }
 
     private java.net.URI icd10Uri(UriBuilder uri, String concept, int limit) {
@@ -333,7 +376,7 @@ public class Icd10Service {
                 .build();
     }
 
-    private List<Icd10SearchResult> parseNlmResponse(String concept, JsonNode response) {
+    private List<Icd10SearchResult> parseNlmResponse(String originalConcept, String queryConcept, JsonNode response, double scorePenalty) {
         if (response == null || !response.isArray() || response.size() < 4 || !response.get(3).isArray()) {
             return List.of();
         }
@@ -344,17 +387,64 @@ public class Icd10Service {
             String code = row.size() > 0 ? row.get(0).asText() : "";
             String description = row.size() > 1 ? row.get(1).asText() : "";
             int rank = i + 1;
+            double score = adjustedScore(originalConcept, queryConcept, description, rank, scorePenalty);
             results.add(new Icd10SearchResult(
                     code,
                     description,
                     description,
                     rank,
-                    score(concept, description, rank),
+                    score,
+                    matchPercentage(score),
                     isLikelyBillable(code),
                     chapter(code),
-                    matchReason(concept, description)));
+                    matchReason(originalConcept, queryConcept, description)));
         }
         return results;
+    }
+
+    private List<Icd10SearchResult> rerank(List<Icd10SearchResult> results) {
+        List<Icd10SearchResult> reranked = new ArrayList<>();
+        for (int i = 0; i < results.size(); i++) {
+            Icd10SearchResult result = results.get(i);
+            reranked.add(new Icd10SearchResult(
+                    result.code(),
+                    result.shortDescription(),
+                    result.longDescription(),
+                    i + 1,
+                    result.score(),
+                    result.matchPercentage(),
+                    result.billable(),
+                    result.chapter(),
+                    result.matchReason()));
+        }
+        return reranked;
+    }
+
+    private List<String> queryVariants(String concept) {
+        Set<String> variants = new LinkedHashSet<>();
+        String base = normalize(concept);
+        variants.add(base);
+
+        String withoutPainQualifiers = normalize(base
+                .replaceAll("\\b(acute|chronic)\\b", " ")
+                .replaceAll("\\bdue to documented condition\\b", " ")
+                .replaceAll("\\binjury related\\b", " "));
+        variants.add(withoutPainQualifiers);
+
+        String withoutEncounter = normalize(withoutPainQualifiers
+                .replaceAll("\\b(initial encounter|subsequent encounter|sequela)\\b", " "));
+        variants.add(withoutEncounter);
+
+        if (withoutPainQualifiers.matches(".*\\b(left|right|bilateral)\\b.*\\bpain\\b.*")) {
+            variants.add(normalize(withoutPainQualifiers.replaceAll("\\b(left|right|bilateral)\\b", " ")));
+        }
+        if (base.matches(".*\\b(chronic|acute)\\b.*\\bpain\\b.*")) {
+            variants.add(base.contains("chronic") ? "chronic pain" : "acute pain");
+        }
+
+        return variants.stream()
+                .filter(variant -> variant.length() >= 3)
+                .toList();
     }
 
     private List<String> detectConcepts(String input) {
@@ -381,6 +471,11 @@ public class Icd10Service {
         }
         normalized = PUNCTUATION.matcher(normalized).replaceAll(" ");
         normalized = SPACE.matcher(normalized).replaceAll(" ");
+        normalized = normalized
+                .replaceAll("\\b(due to documented condition)(?:\\s+due to documented condition)+\\b", "$1")
+                .replaceAll("\\b(injury related)(?:\\s+injury related)+\\b", "$1")
+                .replaceAll("\\b(initial encounter)(?:\\s+initial encounter)+\\b", "$1")
+                .replaceAll("\\b(subsequent encounter)(?:\\s+subsequent encounter)+\\b", "$1");
         return normalized.replaceAll(" *\\n+ *", "\n").trim();
     }
 
@@ -393,29 +488,86 @@ public class Icd10Service {
     }
 
     private boolean needsMoreInformation(String concept) {
-        return concept.length() < 8
-                || concept.matches(".*\\b(pain|sprain|fracture|injury|diabetes|infection|wound|burn|asthma|failure)\\b.*");
+        return !clarifyingQuestions(concept).isEmpty();
     }
 
     private List<String> clarifyingQuestions(String concept) {
         List<String> questions = new ArrayList<>();
+        boolean hasLaterality = concept.matches(".*\\b(left|right|bilateral|unspecified)\\b.*");
+        boolean hasEncounter = concept.matches(".*\\b(initial encounter|subsequent encounter|sequela)\\b.*");
+        boolean hasPainSpecificity = concept.matches(".*\\b(acute|chronic|injury related|due to documented condition)\\b.*");
+        boolean hasConditionSpecificity = concept.matches(".*\\b(with|without|complication|complications|mild|moderate|severe|acute|chronic|type 1|type 2)\\b.*");
+
         if (!concept.matches(".*\\b(left|right|bilateral|unspecified)\\b.*") && concept.matches(".*\\b(ankle|knee|arm|leg|shoulder|hip|eye|ear|hand|foot|wrist)\\b.*")) {
             questions.add("Is laterality left, right, bilateral, or unspecified?");
         }
-        if (concept.matches(".*\\b(sprain|fracture|injury|wound|burn)\\b.*")) {
+        if (concept.matches(".*\\b(sprain|fracture|injury|wound|burn)\\b.*") && !hasEncounter) {
             questions.add("Is this the initial encounter, subsequent encounter, or sequela?");
+        }
+        if (concept.matches(".*\\b(sprain|fracture|injury|wound|burn)\\b.*")
+                && !concept.matches(".*\\b(ankle|knee|arm|leg|shoulder|hip|eye|ear|hand|foot|wrist|head|neck|back|chest|abdomen)\\b.*")) {
             questions.add("What anatomical site and injury cause are documented?");
         }
-        if (concept.matches(".*\\b(pain)\\b.*")) {
+        if (concept.matches(".*\\bpain\\b.*") && !hasPainSpecificity) {
             questions.add("Is the pain acute, chronic, injury-related, or due to a documented condition?");
         }
-        if (concept.matches(".*\\b(diabetes|infection|asthma|failure)\\b.*")) {
+        if (concept.matches(".*\\b(diabetes|infection|asthma|failure)\\b.*") && !hasConditionSpecificity) {
             questions.add("Are complications, severity, etiology, and manifestations documented?");
         }
-        if (questions.isEmpty()) {
+        if (questions.isEmpty() && concept.length() < 8 && !hasLaterality) {
             questions.add("Is there additional clinical specificity documented for site, acuity, cause, severity, or complications?");
         }
         return questions;
+    }
+
+    private List<String> refinementSuggestions(String concept) {
+        Set<String> suggestions = new LinkedHashSet<>();
+        String base = removeFiller(concept);
+        if (clarifyingQuestions(base).isEmpty()) {
+            return List.of();
+        }
+
+        if (!base.matches(".*\\b(left|right|bilateral|unspecified)\\b.*")
+                && base.matches(".*\\b(ankle|knee|arm|leg|shoulder|hip|eye|ear|hand|foot|wrist)\\b.*")) {
+            suggestions.add(base + " left");
+            suggestions.add(base + " right");
+            suggestions.add(base + " bilateral");
+        }
+        if (base.matches(".*\\b(sprain|fracture|injury|wound|burn)\\b.*")
+                && !base.matches(".*\\b(initial encounter|subsequent encounter|sequela)\\b.*")) {
+            suggestions.add(base + " initial encounter");
+            suggestions.add(base + " subsequent encounter");
+            suggestions.add(base + " sequela");
+        }
+        if (base.matches(".*\\bpain\\b.*") && !base.matches(".*\\b(acute|chronic|injury related|due to documented condition)\\b.*")) {
+            suggestions.add("acute " + base);
+            suggestions.add("chronic " + base);
+            suggestions.add(base + " due to documented condition");
+            suggestions.add(base + " injury related");
+        }
+        if (base.matches(".*\\bdiabetes\\b.*") && !base.matches(".*\\b(type 1|type 2|with|without)\\b.*")) {
+            suggestions.add("type 1 " + base);
+            suggestions.add("type 2 " + base);
+            suggestions.add(base + " with complications");
+        }
+        if (base.matches(".*\\binfection\\b.*") && !base.matches(".*\\b(acute|chronic|site|organism)\\b.*")) {
+            suggestions.add("acute " + base);
+            suggestions.add(base + " with documented organism");
+        }
+        if (suggestions.isEmpty() && !base.matches(".*\\b(acute|chronic)\\b.*")) {
+            suggestions.add(base + " acute");
+            suggestions.add(base + " chronic");
+            suggestions.add(base + " unspecified");
+        } else if (suggestions.isEmpty()) {
+            suggestions.add(base + " unspecified");
+            suggestions.add(base + " with complications");
+        }
+
+        return suggestions.stream()
+                .map(this::normalize)
+                .filter(suggestion -> !suggestion.equals(base) && suggestion.length() >= 3)
+                .limit(6)
+                .toList();
     }
 
     private double score(String concept, String description, int rank) {
@@ -426,6 +578,16 @@ public class Icd10Service {
         double lexical = terms.length == 0 ? 0.0 : (double) matches / terms.length;
         double ranked = Math.max(0.0, 1.0 - ((rank - 1) * 0.04));
         return Math.round(((lexical * 0.65) + (ranked * 0.35)) * 100.0) / 100.0;
+    }
+
+    private double adjustedScore(String originalConcept, String queryConcept, String description, int rank, double scorePenalty) {
+        double originalScore = score(originalConcept, description, rank);
+        double queryScore = score(queryConcept, description, rank) * scorePenalty;
+        return Math.round(Math.max(originalScore, queryScore) * 100.0) / 100.0;
+    }
+
+    private int matchPercentage(double score) {
+        return (int) Math.round(Math.max(0.0, Math.min(1.0, score)) * 100.0);
     }
 
     private boolean isLikelyBillable(String code) {
@@ -462,8 +624,12 @@ public class Icd10Service {
         };
     }
 
-    private String matchReason(String concept, String description) {
-        return "Matched government ICD-10-CM code/name search for normalized term \"" + concept + "\" against \"" + description + "\".";
+    private String matchReason(String originalConcept, String queryConcept, String description) {
+        if (originalConcept.equals(queryConcept)) {
+            return "Matched government ICD-10-CM code/name search for normalized term \"" + originalConcept + "\" against \"" + description + "\".";
+        }
+        return "Matched government ICD-10-CM code/name search for fallback term \"" + queryConcept
+                + "\" after normalized term \"" + originalConcept + "\" returned too few direct matches.";
     }
 
     private int resultLimit(Integer limit) {
