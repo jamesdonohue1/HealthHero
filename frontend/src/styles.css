@@ -127,7 +127,8 @@ body {
 .export-row,
 .editor-actions,
 .metadata-strip,
-.search-row {
+.search-row,
+.auth-actions {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -139,8 +140,37 @@ body {
 }
 
 .toolbar,
-.export-row {
+.export-row,
+.auth-actions {
   flex-wrap: wrap;
+}
+
+.auth-panel {
+  background: #fff;
+  border: 1px solid #d7ded8;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.auth-panel-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.auth-panel-body label {
+  color: #344054;
+  display: grid;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 4px;
+}
+
+.auth-panel-body input {
+  border: 1px solid #cfd6d1;
+  border-radius: 6px;
+  font: inherit;
+  padding: 8px 10px;
 }
 
 .phi-alert {
@@ -155,12 +185,55 @@ body {
   gap: 14px;
 }
 
+.module-view {
+  display: none;
+  min-height: 0;
+  flex: 1;
+}
+
+.module-view.active {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hl7-module-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .icd10-workspace {
   min-height: 0;
   flex: 1;
   display: grid;
   grid-template-columns: minmax(420px, 1fr) 320px;
   gap: 14px;
+}
+
+.cpt-workspace {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(460px, 1fr) 360px;
+  gap: 14px;
+}
+
+.cpt-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cpt-check-panel {
+  min-height: 0;
+}
+
+.cpt-check-form {
+  align-items: stretch;
+  flex-direction: column;
 }
 
 .tools-workspace {
@@ -603,6 +676,7 @@ code,
   }
 
   .icd10-workspace,
+  .cpt-workspace,
   .tool-grid {
     grid-template-columns: 1fr;
   }

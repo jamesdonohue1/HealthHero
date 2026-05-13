@@ -14,6 +14,12 @@ spring:
 
 server:
   port: ${PORT:8080}
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        secure: ${SECURE_COOKIES:false}
+        same-site: strict
 
 springdoc:
   swagger-ui:
@@ -22,6 +28,12 @@ springdoc:
 app:
   encryption-key: ${ENCRYPTION_KEY:local-dev-key-change-me}
   saved-message-cleanup-ms: ${SAVED_MESSAGE_CLEANUP_MS:3600000}
+  security:
+    jwt-secret: ${JWT_SECRET:dev-change-me-healthcare-hero}
+    token-ttl-minutes: ${TOKEN_TTL_MINUTES:480}
+    idle-timeout-minutes: ${IDLE_TIMEOUT_MINUTES:30}
+    max-failed-attempts: ${MAX_FAILED_ATTEMPTS:5}
+    lockout-minutes: ${LOCKOUT_MINUTES:15}
   icd10:
     api-base-url: ${ICD10_API_BASE_URL:https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search}
 

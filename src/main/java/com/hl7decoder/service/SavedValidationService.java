@@ -34,16 +34,32 @@ public class SavedValidationService {
     }
 
     public SavedValidationResponse saveAnonymous(Hl7Request request) {
+        return saveForOrganization(request, null);
+    }
+
+    public SavedValidationResponse saveForOrganization(Hl7Request request, UUID organizationId) {
         Hl7ParseResult result = hl7Service.parseAndValidate(request);
         Instant created = Instant.now();
         Instant expires = created.plus(24, ChronoUnit.HOURS);
-        SavedValidation saved = new SavedValidation(UUID.randomUUID(), created, expires, encode(request.message()), write(result));
+        SavedValidation saved = new SavedValidation(UUID.randomUUID(), created, expires, organizationId, encode(request.message()), write(result));
         repository.save(saved);
         return new SavedValidationResponse(saved.getId(), created, expires, result);
     }
 
     public SavedValidationResponse get(UUID id) {
         SavedValidation saved = repository.findById(id).filter(item -> item.getExpiresAt().isAfter(Instant.now()))
+                .orElseThrow(() -> new EntityNotFoundException("Validation not found or expired"));
+        try {
+            return new SavedValidationResponse(saved.getId(), saved.getCreatedAt(), saved.getExpiresAt(),
+                    objectMapper.readValue(saved.getResultJson(), Hl7ParseResult.class));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Saved validation could not be decoded", ex);
+        }
+    }
+
+    public SavedValidationResponse getForOrganization(UUID id, UUID organizationId) {
+        SavedValidation saved = repository.findByIdAndOrganizationId(id, organizationId)
+                .filter(item -> item.getExpiresAt().isAfter(Instant.now()))
                 .orElseThrow(() -> new EntityNotFoundException("Validation not found or expired"));
         try {
             return new SavedValidationResponse(saved.getId(), saved.getCreatedAt(), saved.getExpiresAt(),

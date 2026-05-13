@@ -21,6 +21,8 @@ public class SavedValidation {
     @Column(nullable = false)
     private Instant expiresAt;
 
+    private UUID organizationId;
+
     @Lob
     @Column(nullable = false)
     private String encryptedPayload;
@@ -33,9 +35,14 @@ public class SavedValidation {
     }
 
     public SavedValidation(UUID id, Instant createdAt, Instant expiresAt, String encryptedPayload, String resultJson) {
+        this(id, createdAt, expiresAt, null, encryptedPayload, resultJson);
+    }
+
+    public SavedValidation(UUID id, Instant createdAt, Instant expiresAt, UUID organizationId, String encryptedPayload, String resultJson) {
         this.id = id;
         this.createdAt = createdAt;
         this.expiresAt = expiresAt;
+        this.organizationId = organizationId;
         this.encryptedPayload = encryptedPayload;
         this.resultJson = resultJson;
     }
@@ -50,6 +57,10 @@ public class SavedValidation {
 
     public Instant getExpiresAt() {
         return expiresAt;
+    }
+
+    public UUID getOrganizationId() {
+        return organizationId;
     }
 
     public String getEncryptedPayload() {
