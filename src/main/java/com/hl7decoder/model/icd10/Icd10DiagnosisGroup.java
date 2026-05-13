@@ -7,6 +7,9 @@ public record Icd10DiagnosisGroup(
         boolean needsMoreInformation,
         List<String> clarifyingQuestions,
         List<String> refinementSuggestions,
+        List<String> queryTerms,
+        int exactMatchCount,
+        int fallbackMatchCount,
         List<Icd10SearchResult> results
 ) {
 }

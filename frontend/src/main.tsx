@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Alert, Box, Button, Chip, CssBaseline, Divider, FormControl, InputLabel, MenuItem, Select, Tab, Tabs, ThemeProvider, Tooltip, Typography, createTheme } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import CheckIcon from '@mui/icons-material/Check';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -66,6 +67,9 @@ type Icd10Result = {
   billable: boolean;
   chapter: string;
   matchReason: string;
+  queryTerm?: string;
+  fallbackMatch?: boolean;
+  source?: string;
 };
 
 type Icd10Group = {
@@ -73,6 +77,9 @@ type Icd10Group = {
   needsMoreInformation: boolean;
   clarifyingQuestions: string[];
   refinementSuggestions?: string[];
+  queryTerms?: string[];
+  exactMatchCount?: number;
+  fallbackMatchCount?: number;
   results: Icd10Result[];
 };
 
@@ -92,11 +99,97 @@ type Icd10SelectedCode = {
   chapter: string;
 };
 
+type Icd10AutocompleteSuggestion = {
+  code: string | null;
+  description: string;
+};
+
+type Icd10RefineResponse = {
+  inputText: string;
+  normalizedInput: string;
+  diagnosisConcepts: string[];
+  clarifyingQuestions: string[];
+};
+
+type ModuleName = 'landing' | 'hl7' | 'icd10' | 'tools';
+
+type Hl7RepairResponse = {
+  originalMessage: string;
+  repairedMessage: string;
+  changed: boolean;
+  repairs: string[];
+};
+
+type FhirConversionResponse = {
+  sourceType: string;
+  targetType: string;
+  bundle: Record<string, unknown>;
+  mappingNotes: string[];
+};
+
+type SyntheticDataResponse = {
+  hl7Messages: string[];
+  fhirBundles: Record<string, unknown>[];
+  x12Claims: string[];
+  patients: string[];
+};
+
+type X12DecodeResponse = {
+  transactionType: string;
+  segments: { index: number; segmentId: string; description: string; loop: string; elements: string[] }[];
+  issues: string[];
+};
+
+type MedicalNecessityResponse = {
+  cptCode: string;
+  icd10Codes: string[];
+  likelyCovered: boolean;
+  riskLevel: string;
+  matchedRules: string[];
+  recommendations: string[];
+};
+
+type GenericPlatformResponse = Record<string, unknown>;
+
 const sampleMessage = `MSH|^~\\&|LAB|HOSP|EHR|CLINIC|20260101123000||ORU^R01|MSG00001|P|2.5.1
 PID|1||12345^^^HOSP^MR||DOE^JANE||19800101|F
 OBR|1||ORD001|CBC^Complete Blood Count|||20260101120000
 OBX|1|NM|WBC^White Blood Cells||7.0|10*3/uL|||||F
 ZVN|alpha^beta|custom~repeat`;
+
+const sampleX12 = `ISA*00*          *00*          *ZZ*HEALTHHERO    *ZZ*PAYER          *260101*1230*^*00501*000000001*0*T*:~
+GS*HC*HEALTHHERO*PAYER*20260101*1230*1*X*005010X222A1~
+ST*837*0001*005010X222A1~
+BHT*0019*00*HH0001*20260101*1230*CH~
+NM1*IL*1*DOE*JANE****MI*SYN000001~
+CLM*HH0001*125.00***11:B:1*Y*A*Y*I~
+HI*ABK:M25.562~
+SV1*HC:99213*125.00*UN*1***1~
+SE*8*0001~`;
+
+const sampleFhir = `{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "Patient",
+        "id": "P1",
+        "identifier": [{ "value": "12345" }],
+        "name": [{ "family": "Doe", "given": ["Jane"] }],
+        "birthDate": "1980-01-01",
+        "gender": "female"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "code": { "text": "White Blood Cells" },
+        "valueString": "7.0"
+      }
+    }
+  ]
+}`;
 
 const theme = createTheme({
   palette: {
@@ -115,7 +208,7 @@ const theme = createTheme({
 });
 
 function App() {
-  const [module, setModule] = React.useState<'landing' | 'hl7' | 'icd10'>('landing');
+  const [module, setModule] = React.useState<ModuleName>('landing');
   const [message, setMessage] = React.useState(sampleMessage);
   const [mode, setMode] = React.useState<ValidationMode>('STANDARD');
   const [result, setResult] = React.useState<Hl7Result | null>(null);
@@ -207,12 +300,13 @@ function App() {
       <Box className="app-shell">
         <Box component="header" className="topbar">
           <Box>
-            <Typography variant="h5" fontWeight={800}>Healthcare Decoder</Typography>
+            <Typography variant="h5" fontWeight={800}>Healthcare Hero</Typography>
             <Typography variant="body2" color="text.secondary">Healthcare integration debugging suite</Typography>
           </Box>
           <Tabs value={module} onChange={(_, next) => setModule(next)}>
             <Tab value="hl7" label="HL7" />
             <Tab value="icd10" label="ICD-10" />
+            <Tab value="tools" label="Tools" />
           </Tabs>
           <Button variant="outlined" startIcon={<HomeIcon />} onClick={() => setModule('landing')}>Solutions</Button>
           {module === 'hl7' && <Box className="toolbar">
@@ -233,7 +327,7 @@ function App() {
 
         <Alert severity="warning" className="phi-alert">Do not submit real PHI unless authorized to do so.</Alert>
 
-        {module === 'icd10' ? <Icd10Module /> : <Box className="workspace">
+        {module === 'icd10' ? <Icd10Module /> : module === 'tools' ? <PlatformToolsModule /> : <Box className="workspace">
           <Box className="editor-pane">
             <Box className="pane-head">
               <Typography variant="subtitle1" fontWeight={700}>Raw HL7</Typography>
@@ -298,23 +392,25 @@ function App() {
   );
 }
 
-function LandingPage({ onSelect }: { onSelect: (module: 'hl7' | 'icd10') => void }) {
+function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'landing'>) => void }) {
   return (
     <Box className="landing-page">
       <Box className="landing-hero" sx={{ backgroundImage: `linear-gradient(90deg, rgba(9, 28, 31, 0.86), rgba(9, 28, 31, 0.48), rgba(9, 28, 31, 0.16)), url(${heroImage})` }}>
         <Box className="landing-nav">
-          <Typography variant="h6" fontWeight={900}>Healthcare Decoder</Typography>
+          <Typography variant="h6" fontWeight={900}>Healthcare Hero</Typography>
           <Box className="landing-nav-actions">
             <Button color="inherit" onClick={() => onSelect('hl7')}>HL7</Button>
             <Button color="inherit" onClick={() => onSelect('icd10')}>ICD-10</Button>
+            <Button color="inherit" onClick={() => onSelect('tools')}>Tools</Button>
           </Box>
         </Box>
         <Box className="landing-copy">
-          <Typography variant="h2" component="h1" fontWeight={900}>Healthcare Decoder</Typography>
-          <Typography variant="h6">Choose the workflow you need: validate HL7 messages or search ICD-10-CM diagnosis code suggestions from a backend-mediated government source.</Typography>
+          <Typography variant="h2" component="h1" fontWeight={900}>Healthcare Hero</Typography>
+          <Typography variant="h6">Choose the workflow you need: validate HL7 messages, search ICD-10-CM code suggestions, or run interoperability and revenue cycle tools.</Typography>
           <Box className="landing-actions">
             <Button size="large" variant="contained" startIcon={<HubIcon />} onClick={() => onSelect('hl7')}>Open HL7 Decoder</Button>
             <Button size="large" variant="outlined" color="inherit" startIcon={<LocalOfferIcon />} onClick={() => onSelect('icd10')}>Open ICD-10 Search</Button>
+            <Button size="large" variant="outlined" color="inherit" startIcon={<SearchIcon />} onClick={() => onSelect('tools')}>Open Platform Tools</Button>
           </Box>
         </Box>
       </Box>
@@ -333,6 +429,13 @@ function LandingPage({ onSelect }: { onSelect: (module: 'hl7' | 'icd10') => void
             <span>
               <strong>ICD-10 Search</strong>
               <small>Convert diagnosis text into grouped ICD-10-CM code suggestions.</small>
+            </span>
+          </button>
+          <button type="button" className="solution-card" onClick={() => onSelect('tools')}>
+            <span className="solution-icon"><SearchIcon /></span>
+            <span>
+              <strong>Platform Tools</strong>
+              <small>Repair HL7, convert FHIR, generate test data, decode X12, and check medical necessity.</small>
             </span>
           </button>
         </Box>
@@ -436,6 +539,29 @@ function Icd10Module() {
   const [status, setStatus] = React.useState('');
   const [error, setError] = React.useState('');
   const [selectedCodes, setSelectedCodes] = React.useState<Icd10SelectedCode[]>([]);
+  const [autocompleteSuggestions, setAutocompleteSuggestions] = React.useState<Icd10AutocompleteSuggestion[]>([]);
+  const [refineQuestions, setRefineQuestions] = React.useState<string[]>([]);
+  const [copiedText, setCopiedText] = React.useState('');
+
+  React.useEffect(() => {
+    const normalized = inputText.trim();
+    if (normalized.length < 3) {
+      setAutocompleteSuggestions([]);
+      return;
+    }
+    const timeout = window.setTimeout(async () => {
+      try {
+        const response = await postJson<{ suggestions: Icd10AutocompleteSuggestion[] }>('/api/icd10/autocomplete', {
+          inputText: normalized,
+          resultLimit: 5
+        });
+        setAutocompleteSuggestions(response.suggestions);
+      } catch {
+        setAutocompleteSuggestions([]);
+      }
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [inputText]);
 
   async function search() {
     await runSearch(inputText);
@@ -444,6 +570,7 @@ function Icd10Module() {
   async function runSearch(nextInputText: string) {
     setStatus('Searching ICD-10-CM...');
     setError('');
+    setRefineQuestions([]);
     try {
       const next = await postJson<Icd10Response>('/api/icd10/search', {
         inputText: nextInputText,
@@ -473,6 +600,27 @@ function Icd10Module() {
       setStatus(`Saved until ${new Date(saved.expiresAt).toLocaleString()}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save request failed.');
+      setStatus('');
+    }
+  }
+
+  async function refineInput() {
+    setStatus('Checking specificity...');
+    setError('');
+    try {
+      const response = await postJson<Icd10RefineResponse>('/api/icd10/refine', {
+        inputText,
+        resultLimit: 10,
+        includeClarifyingQuestions: true,
+        includeAiRefinement: true
+      });
+      setRefineQuestions(response.clarifyingQuestions);
+      if (response.diagnosisConcepts.length > 0) {
+        setInputText(response.diagnosisConcepts.join('\n'));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Refine request failed.');
+    } finally {
       setStatus('');
     }
   }
@@ -521,10 +669,29 @@ function Icd10Module() {
 
   async function copyText(text: string) {
     await navigator.clipboard.writeText(text);
+    setCopiedText(text);
+    window.setTimeout(() => {
+      setCopiedText((current) => current === text ? '' : current);
+    }, 1400);
   }
 
   function matchLabel(item: Icd10Result) {
     return `Match ${item.matchPercentage ?? Math.round(item.score * 100)}%`;
+  }
+
+  function selectedCodesText(includeDescriptions: boolean) {
+    return selectedCodes
+      .map((code) => includeDescriptions ? `${code.code} - ${code.description}` : code.code)
+      .join('\n');
+  }
+
+  function selectedCodesCsv() {
+    return selectedCodes.map((code) => code.code).join(', ');
+  }
+
+  function updateInputText(nextInputText: string) {
+    setInputText(nextInputText);
+    setRefineQuestions([]);
   }
 
   return (
@@ -538,24 +705,47 @@ function Icd10Module() {
             </Box>
             <Box className="toolbar">
               <Button variant="contained" onClick={search} startIcon={<SearchIcon />}>Search</Button>
-              <Button variant="outlined" onClick={() => { setInputText(''); setResult(null); }} startIcon={<ClearAllIcon />}>Clear</Button>
+              <Button variant="outlined" onClick={refineInput} startIcon={<SearchIcon />}>Refine</Button>
+              <Button variant="outlined" onClick={() => { updateInputText(''); setResult(null); setAutocompleteSuggestions([]); }} startIcon={<ClearAllIcon />}>Clear</Button>
               <Button variant="outlined" onClick={saveSearch} startIcon={<SaveIcon />}>Save</Button>
             </Box>
           </Box>
           <textarea
             className="icd10-textarea"
             value={inputText}
-            onChange={(event) => setInputText(event.target.value)}
+            onChange={(event) => updateInputText(event.target.value)}
             placeholder="Enter diagnosis text, clinical note snippets, or multiple diagnoses on separate lines"
           />
           <Box className="sample-row">
             {['chest pain', 'diabetes with kidney disease', 'left ankle sprain initial encounter'].map((sample) => (
-              <Button key={sample} size="small" variant="outlined" onClick={() => setInputText(sample)}>{sample}</Button>
+              <Button key={sample} size="small" variant="outlined" onClick={() => updateInputText(sample)}>{sample}</Button>
             ))}
           </Box>
+          {autocompleteSuggestions.length > 0 && (
+            <Box className="autocomplete-row">
+              <Typography variant="caption" color="text.secondary" className="suggestions-label">Suggestions</Typography>
+              {autocompleteSuggestions.map((suggestion) => (
+                <Chip
+                  key={`${suggestion.code ?? 'phrase'}-${suggestion.description}`}
+                  size="small"
+                  className="autocomplete-chip"
+                  label={suggestion.code ? `${suggestion.code} ${suggestion.description}` : suggestion.description}
+                  clickable
+                  onClick={() => updateInputText(suggestion.description)}
+                />
+              ))}
+            </Box>
+          )}
         </Box>
 
         {error && <Alert severity="error">{error}</Alert>}
+        {refineQuestions.length > 0 && (
+          <Alert severity="info">
+            <ul className="refine-question-list">
+              {refineQuestions.map((question) => <li key={question}>{question}</li>)}
+            </ul>
+          </Alert>
+        )}
         {!result && !error && <Alert severity="info">Enter plain-English diagnosis text to receive grouped ICD-10-CM suggestions.</Alert>}
         {result && (
           <Box className="icd10-results">
@@ -596,6 +786,11 @@ function Icd10Module() {
                     )}
                   </Alert>
                 )}
+                {group.fallbackMatchCount ? (
+                  <Alert severity="info" className="fallback-box">
+                    No exact ICD-10-CM description match was required. Showing {group.fallbackMatchCount} fallback match{group.fallbackMatchCount === 1 ? '' : 'es'} from {group.queryTerms?.join(', ') || 'broader search terms'}.
+                  </Alert>
+                ) : null}
                 {group.results.length === 0 ? (
                   <Alert severity="warning">No government ICD-10-CM matches returned for this diagnosis text.</Alert>
                 ) : group.results.map((item) => (
@@ -608,29 +803,37 @@ function Icd10Module() {
                             size="small"
                             variant="outlined"
                             className="copy-code-button"
-                            startIcon={<ContentCopyIcon />}
+                            startIcon={copiedText === item.code ? <CheckIcon /> : <ContentCopyIcon />}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
                               copyText(item.code);
                             }}
                           >
-                            Copy
+                            {copiedText === item.code ? 'Copied' : 'Copy'}
                           </Button>
                         </Tooltip>
                       </span>
-                      <span>{item.shortDescription}</span>
-                      <Chip size="small" color="info" variant="outlined" label={matchLabel(item)} />
-                      <Chip size="small" variant="outlined" label={item.billable ? 'Billable' : 'Non-billable'} />
+                      <span className="result-description">{item.shortDescription}</span>
+                      <Box className="result-badges">
+                        <Chip size="small" color="info" variant="outlined" label={matchLabel(item)} />
+                        <Chip size="small" variant="outlined" label={item.billable ? 'Billable' : 'Non-billable'} />
+                      </Box>
                     </summary>
                     <Box className="result-detail">
                       <Typography variant="body2"><strong>Long description:</strong> {item.longDescription}</Typography>
                       <Typography variant="body2"><strong>Chapter/category:</strong> {item.chapter}</Typography>
+                      <Typography variant="body2"><strong>Lookup source:</strong> {item.source || 'NLM Clinical Tables ICD-10-CM'}</Typography>
+                      <Typography variant="body2"><strong>Query term:</strong> {item.queryTerm || group.diagnosisText}{item.fallbackMatch ? ' (fallback)' : ''}</Typography>
                       <Typography variant="body2"><strong>Match reason:</strong> {item.matchReason}</Typography>
                       <Box className="result-actions">
                         <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => addCode(item)}>Select</Button>
-                        <Button size="small" variant="outlined" startIcon={<ContentCopyIcon />} onClick={() => copyText(item.code)}>Copy code</Button>
-                        <Button size="small" variant="outlined" startIcon={<ContentCopyIcon />} onClick={() => copyText(item.longDescription)}>Copy description</Button>
+                        <Button size="small" variant="outlined" startIcon={copiedText === item.code ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(item.code)}>
+                          {copiedText === item.code ? 'Copied' : 'Copy code'}
+                        </Button>
+                        <Button size="small" variant="outlined" startIcon={copiedText === item.longDescription ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(item.longDescription)}>
+                          {copiedText === item.longDescription ? 'Copied' : 'Copy description'}
+                        </Button>
                       </Box>
                     </Box>
                   </details>
@@ -660,11 +863,311 @@ function Icd10Module() {
         <Divider />
         <Box className="selected-actions">
           <Button size="small" variant="outlined" onClick={() => setSelectedCodes([])}>Clear selected</Button>
+          <Button size="small" variant="outlined" startIcon={copiedText === selectedCodesText(false) ? <CheckIcon /> : <ContentCopyIcon />} disabled={selectedCodes.length === 0} onClick={() => copyText(selectedCodesText(false))}>
+            Copy codes
+          </Button>
+          <Button size="small" variant="outlined" startIcon={copiedText === selectedCodesCsv() ? <CheckIcon /> : <ContentCopyIcon />} disabled={selectedCodes.length === 0} onClick={() => copyText(selectedCodesCsv())}>
+            Copy CSV
+          </Button>
+          <Button size="small" variant="outlined" startIcon={copiedText === selectedCodesText(true) ? <CheckIcon /> : <ContentCopyIcon />} disabled={selectedCodes.length === 0} onClick={() => copyText(selectedCodesText(true))}>
+            Copy details
+          </Button>
           {(['json', 'csv', 'pdf', 'text'] as const).map((format) => (
             <Button key={format} size="small" variant="outlined" startIcon={<DownloadIcon />} onClick={() => exportIcd10(format, true)}>
               {format.toUpperCase()}
             </Button>
           ))}
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function PlatformToolsModule() {
+  const [repairInput, setRepairInput] = React.useState(sampleMessage);
+  const [repairResult, setRepairResult] = React.useState<Hl7RepairResponse | null>(null);
+  const [profileResult, setProfileResult] = React.useState<GenericPlatformResponse | null>(null);
+  const [fhirInput, setFhirInput] = React.useState(sampleMessage);
+  const [fhirResult, setFhirResult] = React.useState<FhirConversionResponse | null>(null);
+  const [fhirToHl7Input, setFhirToHl7Input] = React.useState(sampleFhir);
+  const [fhirToHl7Result, setFhirToHl7Result] = React.useState<GenericPlatformResponse | null>(null);
+  const [syntheticCount, setSyntheticCount] = React.useState(3);
+  const [syntheticDiagnosis, setSyntheticDiagnosis] = React.useState('M25.562');
+  const [syntheticResult, setSyntheticResult] = React.useState<SyntheticDataResponse | null>(null);
+  const [syntheticManifest, setSyntheticManifest] = React.useState<GenericPlatformResponse | null>(null);
+  const [x12Input, setX12Input] = React.useState(sampleX12);
+  const [x12Result, setX12Result] = React.useState<X12DecodeResponse | null>(null);
+  const [cptCode, setCptCode] = React.useState('83036');
+  const [icdCodes, setIcdCodes] = React.useState('E11.9');
+  const [payer, setPayer] = React.useState('Medicare');
+  const [necessityResult, setNecessityResult] = React.useState<MedicalNecessityResponse | null>(null);
+  const [roadmapText, setRoadmapText] = React.useState('Left knee pain MRI denied for medical necessity. Patient DOE^JANE has member ABC123.');
+  const [roadmapResult, setRoadmapResult] = React.useState<GenericPlatformResponse | null>(null);
+  const [roadmapEngine, setRoadmapEngine] = React.useState('prior-auth');
+  const [status, setStatus] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [copiedText, setCopiedText] = React.useState('');
+
+  async function run<T>(label: string, action: () => Promise<T>, onSuccess: (result: T) => void) {
+    setStatus(label);
+    setError('');
+    try {
+      onSuccess(await action());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Platform tool request failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function copyText(text: string) {
+    await navigator.clipboard.writeText(text);
+    setCopiedText(text);
+    window.setTimeout(() => {
+      setCopiedText((current) => current === text ? '' : current);
+    }, 1400);
+  }
+
+  const repairedMessage = repairResult?.repairedMessage ?? '';
+  const fhirJson = fhirResult ? JSON.stringify(fhirResult.bundle, null, 2) : '';
+  const fhirToHl7Message = typeof fhirToHl7Result?.message === 'string' ? fhirToHl7Result.message : '';
+  const syntheticJson = syntheticResult ? JSON.stringify(syntheticResult, null, 2) : '';
+  const roadmapJson = roadmapResult ? JSON.stringify(roadmapResult, null, 2) : '';
+  const profileJson = profileResult ? JSON.stringify(profileResult, null, 2) : '';
+  const manifestJson = syntheticManifest ? JSON.stringify(syntheticManifest, null, 2) : '';
+
+  const roadmapEngines: { id: string; label: string; path: string }[] = [
+    { id: 'prior-auth', label: 'Prior Auth', path: '/api/platform/prior-auth/analyze' },
+    { id: 'denials', label: 'Denials', path: '/api/platform/denials/analyze' },
+    { id: 'cdi', label: 'CDI', path: '/api/platform/cdi/analyze' },
+    { id: 'terminology', label: 'Terminology', path: '/api/platform/terminology/normalize' },
+    { id: 'labs', label: 'Labs', path: '/api/platform/labs/interpret' },
+    { id: 'monitoring', label: 'Monitoring', path: '/api/platform/monitoring/snapshot' },
+    { id: 'coding', label: 'AI Coding', path: '/api/platform/coding/assist' },
+    { id: 'sandbox', label: 'API Sandbox', path: '/api/platform/sandbox/plan' },
+    { id: 'eligibility', label: 'Eligibility', path: '/api/platform/eligibility/analyze' },
+    { id: 'compliance', label: 'Compliance', path: '/api/platform/compliance/scan' },
+    { id: 'search', label: 'Global Search', path: '/api/platform/search' }
+  ];
+
+  function selectedRoadmapEngine() {
+    return roadmapEngines.find((engine) => engine.id === roadmapEngine) ?? roadmapEngines[0];
+  }
+
+  return (
+    <Box className="tools-workspace">
+      <Box className="tools-status-row">
+        <Box>
+          <Typography variant="h6" fontWeight={800}>Platform Tools</Typography>
+          {status && <Typography variant="caption" color="text.secondary">{status}</Typography>}
+        </Box>
+        <Chip label="MVP engines" variant="outlined" />
+      </Box>
+      {error && <Alert severity="error">{error}</Alert>}
+
+      <Box className="tool-grid">
+        <Box className="tool-panel">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>HL7 Repair</Typography>
+            <Box className="tool-button-row">
+              <Button variant="outlined" onClick={() => run('Running profile validation...', () => postJson<GenericPlatformResponse>('/api/platform/hl7/profile-validate', { message: repairInput, mode: 'STANDARD' }), setProfileResult)}>Profile</Button>
+              <Button variant="contained" onClick={() => run('Repairing HL7...', () => postJson<Hl7RepairResponse>('/api/hl7/repair', { message: repairInput, mode: 'STANDARD' }), setRepairResult)}>Repair</Button>
+            </Box>
+          </Box>
+          <textarea className="tool-textarea" value={repairInput} onChange={(event) => setRepairInput(event.target.value)} />
+          {profileResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label="Advanced profile validation" />
+                <Button size="small" variant="outlined" startIcon={copiedText === profileJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(profileJson)}>
+                  {copiedText === profileJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <pre className="json-view">{profileJson}</pre>
+            </Box>
+          )}
+          {repairResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip color={repairResult.changed ? 'warning' : 'success'} label={repairResult.changed ? 'Changed' : 'No changes'} />
+                <Button size="small" variant="outlined" startIcon={copiedText === repairedMessage ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(repairedMessage)}>
+                  {copiedText === repairedMessage ? 'Copied' : 'Copy repaired'}
+                </Button>
+              </Box>
+              <ul className="compact-list">{repairResult.repairs.map((repair) => <li key={repair}>{repair}</li>)}</ul>
+              <pre className="json-view">{repairResult.repairedMessage}</pre>
+            </Box>
+          )}
+        </Box>
+
+        <Box className="tool-panel">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>HL7 to FHIR</Typography>
+            <Button variant="contained" onClick={() => run('Converting HL7 to FHIR...', () => postJson<FhirConversionResponse>('/api/platform/fhir/hl7-to-fhir', { text: fhirInput }), setFhirResult)}>Convert</Button>
+          </Box>
+          <textarea className="tool-textarea" value={fhirInput} onChange={(event) => setFhirInput(event.target.value)} />
+          {fhirResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label={`${fhirResult.sourceType} to ${fhirResult.targetType}`} />
+                <Button size="small" variant="outlined" startIcon={copiedText === fhirJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(fhirJson)}>
+                  {copiedText === fhirJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <ul className="compact-list">{fhirResult.mappingNotes.map((note) => <li key={note}>{note}</li>)}</ul>
+              <pre className="json-view">{fhirJson}</pre>
+            </Box>
+          )}
+        </Box>
+
+        <Box className="tool-panel">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>FHIR to HL7</Typography>
+            <Button variant="contained" onClick={() => run('Converting FHIR to HL7...', () => postJson<GenericPlatformResponse>('/api/platform/fhir/fhir-to-hl7', { text: fhirToHl7Input }), setFhirToHl7Result)}>Convert</Button>
+          </Box>
+          <textarea className="tool-textarea" value={fhirToHl7Input} onChange={(event) => setFhirToHl7Input(event.target.value)} />
+          {fhirToHl7Result && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label={`${fhirToHl7Result.sourceType ?? 'FHIR'} to ${fhirToHl7Result.targetType ?? 'HL7'}`} />
+                <Button size="small" variant="outlined" startIcon={copiedText === fhirToHl7Message ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(fhirToHl7Message)}>
+                  {copiedText === fhirToHl7Message ? 'Copied' : 'Copy HL7'}
+                </Button>
+              </Box>
+              <pre className="json-view">{fhirToHl7Message}</pre>
+            </Box>
+          )}
+        </Box>
+
+        <Box className="tool-panel">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>Synthetic Data</Typography>
+            <Box className="tool-button-row">
+              <Button variant="outlined" onClick={() => run('Loading export manifest...', () => postJson<GenericPlatformResponse>('/api/platform/synthetic/export-manifest', {}), setSyntheticManifest)}>Exports</Button>
+              <Button variant="contained" onClick={() => run('Generating synthetic data...', () => postJson<SyntheticDataResponse>('/api/platform/synthetic/generate', { count: syntheticCount, minAge: 18, maxAge: 90, diagnosis: syntheticDiagnosis }), setSyntheticResult)}>Generate</Button>
+            </Box>
+          </Box>
+          <Box className="tool-form-row">
+            <label>Count <input type="number" min={1} max={25} value={syntheticCount} onChange={(event) => setSyntheticCount(Number(event.target.value))} /></label>
+            <label>Diagnosis <input value={syntheticDiagnosis} onChange={(event) => setSyntheticDiagnosis(event.target.value)} /></label>
+          </Box>
+          {syntheticResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label={`${syntheticResult.patients.length} patients`} />
+                <Button size="small" variant="outlined" startIcon={copiedText === syntheticJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(syntheticJson)}>
+                  {copiedText === syntheticJson ? 'Copied' : 'Copy payload'}
+                </Button>
+              </Box>
+              <ul className="compact-list">{syntheticResult.patients.map((patient) => <li key={patient}>{patient}</li>)}</ul>
+              <pre className="json-view">{syntheticJson}</pre>
+            </Box>
+          )}
+          {syntheticManifest && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label="Export manifest" />
+                <Button size="small" variant="outlined" startIcon={copiedText === manifestJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(manifestJson)}>
+                  {copiedText === manifestJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <pre className="json-view">{manifestJson}</pre>
+            </Box>
+          )}
+        </Box>
+
+        <Box className="tool-panel">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>X12 Decoder</Typography>
+            <Button variant="contained" onClick={() => run('Decoding X12...', () => postJson<X12DecodeResponse>('/api/platform/x12/decode', { text: x12Input }), setX12Result)}>Decode</Button>
+          </Box>
+          <textarea className="tool-textarea" value={x12Input} onChange={(event) => setX12Input(event.target.value)} />
+          {x12Result && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label={x12Result.transactionType} />
+                <Chip color={x12Result.issues.length ? 'warning' : 'success'} label={`${x12Result.issues.length} issues`} />
+              </Box>
+              {x12Result.issues.length > 0 && <ul className="compact-list">{x12Result.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul>}
+              <table className="grid-table">
+                <thead><tr><th>#</th><th>ID</th><th>Description</th><th>Loop</th><th>Elements</th></tr></thead>
+                <tbody>
+                  {x12Result.segments.map((segment) => (
+                    <tr key={`${segment.index}-${segment.segmentId}`}>
+                      <td>{segment.index}</td>
+                      <td><code>{segment.segmentId}</code></td>
+                      <td>{segment.description}</td>
+                      <td>{segment.loop}</td>
+                      <td><code>{segment.elements.join(' | ')}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Box>
+          )}
+        </Box>
+
+        <Box className="tool-panel tool-panel-wide">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>Medical Necessity</Typography>
+            <Button variant="contained" onClick={() => run('Checking medical necessity...', () => postJson<MedicalNecessityResponse>('/api/platform/necessity/check', {
+              cptCode,
+              icd10Codes: icdCodes.split(/[\n, ]+/).filter(Boolean),
+              payer
+            }), setNecessityResult)}>Check</Button>
+          </Box>
+          <Box className="tool-form-row">
+            <label>CPT <input value={cptCode} onChange={(event) => setCptCode(event.target.value)} /></label>
+            <label>ICD-10 <input value={icdCodes} onChange={(event) => setIcdCodes(event.target.value)} /></label>
+            <label>Payer <input value={payer} onChange={(event) => setPayer(event.target.value)} /></label>
+          </Box>
+          {necessityResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip color={necessityResult.likelyCovered ? 'success' : 'warning'} label={necessityResult.likelyCovered ? 'Likely covered' : 'Review needed'} />
+                <Chip label={`Risk ${necessityResult.riskLevel}`} />
+              </Box>
+              <Typography variant="body2"><strong>CPT:</strong> {necessityResult.cptCode}</Typography>
+              <Typography variant="body2"><strong>ICD-10:</strong> {necessityResult.icd10Codes.join(', ') || 'n/a'}</Typography>
+              <ul className="compact-list">
+                {[...necessityResult.matchedRules, ...necessityResult.recommendations].map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </Box>
+          )}
+        </Box>
+
+        <Box className="tool-panel tool-panel-wide">
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>Roadmap Engines</Typography>
+            <Button variant="contained" onClick={() => {
+              const engine = selectedRoadmapEngine();
+              run(`Running ${engine.label}...`, () => postJson<GenericPlatformResponse>(engine.path, { text: roadmapText }), setRoadmapResult);
+            }}>Run</Button>
+          </Box>
+          <Box className="roadmap-engine-row">
+            {roadmapEngines.map((engine) => (
+              <Chip
+                key={engine.id}
+                color={roadmapEngine === engine.id ? 'primary' : 'default'}
+                variant={roadmapEngine === engine.id ? 'filled' : 'outlined'}
+                label={engine.label}
+                clickable
+                onClick={() => setRoadmapEngine(engine.id)}
+              />
+            ))}
+          </Box>
+          <textarea className="tool-textarea" value={roadmapText} onChange={(event) => setRoadmapText(event.target.value)} />
+          {roadmapResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label={selectedRoadmapEngine().label} />
+                <Button size="small" variant="outlined" startIcon={copiedText === roadmapJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(roadmapJson)}>
+                  {copiedText === roadmapJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <pre className="json-view">{roadmapJson}</pre>
+            </Box>
+          )}
         </Box>
       </Box>
     </Box>

@@ -9,6 +9,9 @@ public record Icd10SearchResult(
         int matchPercentage,
         boolean billable,
         String chapter,
-        String matchReason
+        String matchReason,
+        String queryTerm,
+        boolean fallbackMatch,
+        String source
 ) {
 }
