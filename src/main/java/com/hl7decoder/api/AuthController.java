@@ -43,7 +43,8 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public java.util.Map<String, Object> logout() {
+    public java.util.Map<String, Object> logout(@AuthenticationPrincipal AuthenticatedPrincipal principal) {
+        authService.logout(principal);
         return java.util.Map.of("ok", true);
     }
 

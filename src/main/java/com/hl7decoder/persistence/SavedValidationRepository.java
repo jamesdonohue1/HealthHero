@@ -10,4 +10,6 @@ public interface SavedValidationRepository extends JpaRepository<SavedValidation
     List<SavedValidation> findByExpiresAtBefore(Instant now);
 
     java.util.Optional<SavedValidation> findByIdAndOrganizationId(UUID id, UUID organizationId);
+
+    List<SavedValidation> findByOrganizationIdAndCreatedAtBefore(UUID organizationId, Instant cutoff);
 }

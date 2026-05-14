@@ -10,6 +10,10 @@ public record Icd10ExportRequest(
         @NotBlank @Size(max = 8000) String inputText,
         Integer resultLimit,
         List<Icd10SelectedCode> selectedCodes,
-        Boolean selectedOnly
+        Boolean selectedOnly,
+        Boolean redactPhi
 ) {
+    public Icd10ExportRequest(String inputText, Integer resultLimit, List<Icd10SelectedCode> selectedCodes, Boolean selectedOnly) {
+        this(inputText, resultLimit, selectedCodes, selectedOnly, false);
+    }
 }
