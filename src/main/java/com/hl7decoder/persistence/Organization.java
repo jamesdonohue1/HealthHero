@@ -26,6 +26,12 @@ public class Organization {
     @Column(nullable = false)
     private Instant createdAt;
 
+    @Column(nullable = false)
+    private int savedRecordRetentionDays = 30;
+
+    @Column(nullable = false)
+    private int auditRetentionDays = 365;
+
     protected Organization() {
     }
 
@@ -45,5 +51,22 @@ public class Organization {
 
     public String getName() {
         return name;
+    }
+
+    public int getSavedRecordRetentionDays() {
+        return savedRecordRetentionDays;
+    }
+
+    public int getAuditRetentionDays() {
+        return auditRetentionDays;
+    }
+
+    public void updateRetentionSettings(Integer savedRecordRetentionDays, Integer auditRetentionDays) {
+        if (savedRecordRetentionDays != null) {
+            this.savedRecordRetentionDays = savedRecordRetentionDays;
+        }
+        if (auditRetentionDays != null) {
+            this.auditRetentionDays = auditRetentionDays;
+        }
     }
 }

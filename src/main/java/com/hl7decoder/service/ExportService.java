@@ -13,6 +13,7 @@ import com.lowagie.text.DocumentException;
 import com.lowagie.text.FontFactory;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.pdf.PdfWriter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -23,10 +24,17 @@ public class ExportService {
     private final Hl7Service hl7Service;
     private final ObjectMapper objectMapper;
     private final XmlMapper xmlMapper;
+    private final PhiScannerService phiScannerService;
 
     public ExportService(Hl7Service hl7Service, ObjectMapper objectMapper) {
+        this(hl7Service, objectMapper, new PhiScannerService());
+    }
+
+    @Autowired
+    public ExportService(Hl7Service hl7Service, ObjectMapper objectMapper, PhiScannerService phiScannerService) {
         this.hl7Service = hl7Service;
         this.objectMapper = objectMapper;
+        this.phiScannerService = phiScannerService;
         this.xmlMapper = XmlMapper.builder()
                 .findAndAddModules()
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
@@ -90,7 +98,8 @@ public class ExportService {
     }
 
     private Hl7ParseResult parse(ExportRequest request) {
-        return hl7Service.parseAndValidate(new Hl7Request(request.message(), request.mode()));
+        String message = Boolean.TRUE.equals(request.redactPhi()) ? phiScannerService.redact(request.message()) : request.message();
+        return hl7Service.parseAndValidate(new Hl7Request(message, request.mode(), false));
     }
 
     private byte[] writeJson(Hl7ParseResult result) {

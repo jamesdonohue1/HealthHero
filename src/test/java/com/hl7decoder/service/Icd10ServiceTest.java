@@ -83,10 +83,14 @@ class Icd10ServiceTest {
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         AtomicReference<SavedIcd10Search> savedSearch = new AtomicReference<>();
         SavedIcd10SearchRepository repository = repositoryProxy(savedSearch);
+        PayloadEncryptionService encryptionService = new PayloadEncryptionService("local-dev-key-change-me", "v1");
         Icd10Service service = new Icd10Service(
                 builder,
                 repository,
                 new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(),
+                encryptionService,
+                new PhiScannerService(),
+                null,
                 "https://example.test/icd10");
 
         server.expect(once(), requestWithTerm("hypertension"))
@@ -96,7 +100,8 @@ class Icd10ServiceTest {
 
         assertThat(savedSearch.get()).isNotNull();
         assertThat(savedSearch.get().getId()).isEqualTo(UUID.fromString(id));
-        assertThat(savedSearch.get().getSearchJson()).contains("Essential (primary) hypertension");
+        assertThat(savedSearch.get().getSearchJson()).startsWith("aesgcm:v1:");
+        assertThat(encryptionService.decrypt(savedSearch.get().getSearchJson())).contains("Essential (primary) hypertension");
         server.verify();
     }
 

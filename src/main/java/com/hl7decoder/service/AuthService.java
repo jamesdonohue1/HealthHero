@@ -7,6 +7,7 @@ import com.hl7decoder.api.dto.auth.RegisterRequest;
 import com.hl7decoder.model.auth.AuthCapabilitiesResponse;
 import com.hl7decoder.model.auth.AuthResponse;
 import com.hl7decoder.model.auth.UserRole;
+import com.hl7decoder.model.compliance.AuditAction;
 import com.hl7decoder.persistence.AppUser;
 import com.hl7decoder.persistence.AppUserRepository;
 import com.hl7decoder.persistence.Organization;
@@ -31,6 +32,7 @@ public class AuthService {
     private final OrganizationRepository organizationRepository;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
+    private final AuditService auditService;
     private final int maxFailedAttempts;
     private final Duration lockoutDuration;
     private final int idleTimeoutMinutes;
@@ -39,6 +41,7 @@ public class AuthService {
                        OrganizationRepository organizationRepository,
                        PasswordEncoder passwordEncoder,
                        TokenService tokenService,
+                       AuditService auditService,
                        @Value("${app.security.max-failed-attempts:5}") int maxFailedAttempts,
                        @Value("${app.security.lockout-minutes:15}") int lockoutMinutes,
                        @Value("${app.security.idle-timeout-minutes:30}") int idleTimeoutMinutes) {
@@ -46,6 +49,7 @@ public class AuthService {
         this.organizationRepository = organizationRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
+        this.auditService = auditService;
         this.maxFailedAttempts = maxFailedAttempts;
         this.lockoutDuration = Duration.ofMinutes(lockoutMinutes);
         this.idleTimeoutMinutes = idleTimeoutMinutes;
@@ -65,6 +69,8 @@ public class AuthService {
                 organization,
                 Set.of(UserRole.ORGANIZATION_ADMIN, UserRole.CODER, UserRole.INTERFACE_ANALYST)
         ));
+        auditService.record(AuditAction.ADMIN, organization.getPublicId(), user.getPublicId(), "USER",
+                user.getPublicId().toString(), true, "registered organization and initial admin account");
         return authResponse(user);
     }
 
@@ -79,10 +85,14 @@ public class AuthService {
             Instant lockedUntil = user.getFailedLoginCount() + 1 >= maxFailedAttempts ? Instant.now().plus(lockoutDuration) : null;
             user.recordFailure(lockedUntil);
             userRepository.save(user);
+            auditService.record(AuditAction.LOGIN, user.getOrganization().getPublicId(), user.getPublicId(), "USER",
+                    user.getPublicId().toString(), false, "failed login");
             throw new BadCredentialsException("Invalid email or password.");
         }
         user.clearFailures();
         userRepository.save(user);
+        auditService.record(AuditAction.LOGIN, user.getOrganization().getPublicId(), user.getPublicId(), "USER",
+                user.getPublicId().toString(), true, "successful login");
         return authResponse(user);
     }
 
@@ -91,6 +101,8 @@ public class AuthService {
         AppUser user = userRepository.findByEmailIgnoreCase(normalizeEmail(request.email()))
                 .orElseThrow(() -> new EntityNotFoundException("Account not found."));
         user.updatePasswordHash(passwordEncoder.encode(request.newPassword()));
+        auditService.record(AuditAction.ADMIN, user.getOrganization().getPublicId(), user.getPublicId(), "USER",
+                user.getPublicId().toString(), true, "password reset");
         return authResponse(userRepository.save(user));
     }
 
@@ -106,7 +118,16 @@ public class AuthService {
         AppUser user = userRepository.findByPublicId(principal.userId())
                 .orElseThrow(() -> new EntityNotFoundException("Authenticated user not found."));
         user.updateDisplayName(request.displayName());
+        auditService.record(AuditAction.ADMIN, user.getOrganization().getPublicId(), user.getPublicId(), "USER",
+                user.getPublicId().toString(), true, "account profile update");
         return authResponse(userRepository.save(user));
+    }
+
+    public void logout(AuthenticatedPrincipal principal) {
+        if (principal != null) {
+            auditService.record(AuditAction.LOGOUT, principal.organizationId(), principal.userId(), "USER",
+                    principal.userId().toString(), true, "logout");
+        }
     }
 
     @Transactional(readOnly = true)

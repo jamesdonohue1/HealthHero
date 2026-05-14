@@ -551,6 +551,45 @@ body {
   margin: 10px 12px;
 }
 
+.phi-preview-panel {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.phi-preview-text {
+  background: #fffaf0;
+  border: 1px solid #fedf89;
+  border-radius: 6px;
+  color: #182230;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.phi-highlight {
+  background: #fdb022;
+  border: 1px solid #dc6803;
+  border-radius: 4px;
+  color: #101828;
+  display: inline;
+  padding: 1px 3px;
+}
+
+.phi-highlight-label {
+  background: #7a2e0e;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  margin-right: 4px;
+  padding: 1px 3px;
+}
+
 .search-row {
   padding: 9px 12px;
   border-bottom: 1px solid #e4e8e3;
