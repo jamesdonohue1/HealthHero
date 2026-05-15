@@ -1,0 +1,23 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "Patient",
+        "id": "P1",
+        "identifier": [{ "value": "12345" }],
+        "name": [{ "family": "Doe", "given": ["Jane"] }],
+        "birthDate": "1980-01-01",
+        "gender": "female"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "code": { "text": "White Blood Cells" },
+        "valueString": "7.0"
+      }
+    }
+  ]
+}

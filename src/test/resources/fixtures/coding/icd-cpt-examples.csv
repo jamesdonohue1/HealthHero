@@ -1,0 +1,3 @@
+diagnosisText,icd10Code,procedureText,procedureCode,payer
+cough,R05.9,chest x-ray 2 views,71046,Medicare
+diabetes,E11.9,A1c,83036,Medicare

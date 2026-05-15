@@ -1,0 +1,2 @@
+-- Baseline schema marker. Hibernate currently manages table creation in local/test
+-- profiles; production uses this Flyway history as the migration starting point.

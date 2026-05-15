@@ -1,15 +1,17 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { Alert, Box, Button, Chip, CssBaseline, Divider, FormControl, InputLabel, MenuItem, Select, Tab, Tabs, ThemeProvider, Tooltip, Typography, createTheme } from '@mui/material';
+import { Alert, Box, Button, Chip, CssBaseline, Divider, Drawer, FormControl, InputLabel, MenuItem, Select, Switch, Tab, Tabs, ThemeProvider, Tooltip, Typography, createTheme } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CheckIcon from '@mui/icons-material/Check';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DownloadIcon from '@mui/icons-material/Download';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import HomeIcon from '@mui/icons-material/Home';
 import HubIcon from '@mui/icons-material/Hub';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
+import PushPinIcon from '@mui/icons-material/PushPin';
 import SaveIcon from '@mui/icons-material/Save';
 import SearchIcon from '@mui/icons-material/Search';
 import Editor from '@monaco-editor/react';
@@ -121,7 +123,7 @@ type Icd10RefineResponse = {
   clarifyingQuestions: string[];
 };
 
-type ModuleName = 'landing' | 'hl7' | 'icd10' | 'cpt' | 'tools';
+type ModuleName = 'landing' | 'dashboard' | 'hl7' | 'icd10' | 'cpt' | 'workspaces' | 'tools';
 type AuthView = 'login' | 'register' | 'reset' | 'account' | '';
 
 type AuthUser = {
@@ -205,6 +207,21 @@ type ProcedureSearchResponse = {
   results: ProcedureSearchResult[];
 };
 
+type CodeSetImportJobResponse = {
+  id: string;
+  codeSetType: string;
+  codeSetVersion: string;
+  sourceName: string;
+  status: string;
+  totalRows: number;
+  importedRows: number;
+  rejectedRows: number;
+  createdAt: string;
+  completedAt: string | null;
+  rolledBackAt: string | null;
+  validationSummary: string;
+};
+
 type IcdCptMatchResult = {
   diagnosisText: string;
   diagnosisCode: string;
@@ -217,6 +234,60 @@ type IcdCptMatchResult = {
   warnings: string[];
   recommendations: string[];
   modifierSuggestions: { modifier: string; reason: string; required: boolean }[];
+};
+
+type WorkspaceRecord = {
+  id: string;
+  recordType: string;
+  title: string;
+  folder?: string;
+  tags?: string;
+  notes?: string;
+  visibility: string;
+  ownerUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  payload: Record<string, unknown>;
+};
+
+type WorkspaceActivity = {
+  workspaceId: string;
+  actorUserId: string;
+  occurredAt: string;
+  action: string;
+  detail: string;
+};
+
+type AiAssistResponse = {
+  promptType: string;
+  provider: string;
+  model: string;
+  externalCall: boolean;
+  redacted: boolean;
+  tokenEstimate: number;
+  summary: string;
+  suggestions: string[];
+  warnings: string[];
+  approvalStatus: string;
+  generatedAt: string;
+};
+
+type FeatureFlags = {
+  dashboard: boolean;
+  workspaces: boolean;
+  aiAssist: boolean;
+  adminImports: boolean;
+  platformTools: boolean;
+  darkMode: boolean;
+};
+
+const defaultFeatureFlags: FeatureFlags = {
+  dashboard: true,
+  workspaces: true,
+  aiAssist: true,
+  adminImports: true,
+  platformTools: true,
+  darkMode: true
 };
 
 const sampleMessage = `MSH|^~\\&|LAB|HOSP|EHR|CLINIC|20260101123000||ORU^R01|MSG00001|P|2.5.1
@@ -259,21 +330,23 @@ const sampleFhir = `{
   ]
 }`;
 
-const theme = createTheme({
+function buildTheme(darkMode: boolean) {
+  return createTheme({
   palette: {
-    mode: 'light',
+    mode: darkMode ? 'dark' : 'light',
     primary: { main: '#1f6f78' },
     secondary: { main: '#8a5a44' },
     error: { main: '#b42318' },
     warning: { main: '#b54708' },
     info: { main: '#175cd3' },
-    background: { default: '#f7f8f5', paper: '#ffffff' }
+    background: darkMode ? { default: '#11181a', paper: '#182124' } : { default: '#f7f8f5', paper: '#ffffff' }
   },
   typography: {
     fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
   },
   shape: { borderRadius: 8 }
-});
+  });
+}
 
 function App() {
   const [module, setModule] = React.useState<ModuleName>('landing');
@@ -289,6 +362,74 @@ function App() {
   const [status, setStatus] = React.useState('');
   const [error, setError] = React.useState('');
   const [selectedLocation, setSelectedLocation] = React.useState('');
+  const [darkMode, setDarkMode] = React.useState(window.localStorage.getItem('healthcareHeroTheme') === 'dark');
+  const [helpOpen, setHelpOpen] = React.useState(false);
+  const [notification, setNotification] = React.useState('');
+  const [features, setFeatures] = React.useState<FeatureFlags>(defaultFeatureFlags);
+  const activeTheme = React.useMemo(() => buildTheme(darkMode), [darkMode]);
+  const enabledModules = React.useMemo(() => {
+    const modules: ModuleName[] = ['hl7', 'icd10', 'cpt'];
+    if (features.dashboard) {
+      modules.unshift('dashboard');
+    }
+    if (features.workspaces) {
+      modules.push('workspaces');
+    }
+    if (features.platformTools) {
+      modules.push('tools');
+    }
+    return modules;
+  }, [features]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem('healthcareHeroTheme', darkMode ? 'dark' : 'light');
+    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+  }, [darkMode]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem('healthcareHeroModule', module);
+  }, [module]);
+
+  React.useEffect(() => {
+    const savedModule = window.localStorage.getItem('healthcareHeroModule') as ModuleName | null;
+    if (savedModule && savedModule !== 'landing' && enabledModules.includes(savedModule)) {
+      setModule(savedModule);
+    }
+  }, [enabledModules]);
+
+  React.useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === '?' && !event.metaKey && !event.ctrlKey) {
+        setHelpOpen((open) => !open);
+      }
+      if ((event.metaKey || event.ctrlKey) && ['1', '2', '3', '4', '5', '6'].includes(event.key)) {
+        event.preventDefault();
+        const nextModule = enabledModules[Number(event.key) - 1];
+        if (nextModule) {
+          setModule(nextModule);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [enabledModules]);
+
+  React.useEffect(() => {
+    getJson<FeatureFlags>('/api/features')
+      .then((response) => {
+        setFeatures(response);
+        if (!response.darkMode) {
+          setDarkMode(false);
+        }
+      })
+      .catch(() => setFeatures(defaultFeatureFlags));
+  }, []);
+
+  React.useEffect(() => {
+    if (module !== 'landing' && !enabledModules.includes(module)) {
+      setModule(enabledModules[0] ?? 'hl7');
+    }
+  }, [enabledModules, module]);
 
   React.useEffect(() => {
     if (!selectedLocation) {
@@ -344,6 +485,29 @@ function App() {
     }
   }
 
+  async function saveHl7Workspace() {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Saving HL7 project...');
+    setError('');
+    try {
+      const saved = await postJson<WorkspaceRecord>('/api/workspaces', {
+        recordType: 'HL7_PROJECT',
+        title: result?.metadata?.messageType ? `HL7 ${result.metadata.messageType}` : 'HL7 project',
+        folder: 'HL7',
+        tags: 'hl7,project',
+        notes: `${result?.issues.length ?? 0} validation issue(s)`,
+        visibility: 'TEAM',
+        payload: { message, mode, result }
+      });
+      setStatus(`Workspace saved: ${saved.title}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace save failed.');
+      setStatus('');
+    }
+  }
+
   async function download(format: 'json' | 'xml' | 'pdf' | 'hl7' | 'csv') {
     setError('');
     try {
@@ -394,6 +558,7 @@ function App() {
     setCurrentUser(response.user);
     setAuthView('');
     setAuthError('');
+    setModule(features.dashboard ? 'dashboard' : 'hl7');
   }
 
   async function logout() {
@@ -409,9 +574,9 @@ function App() {
   }
 
   return (
-    <ThemeProvider theme={theme}>
+    <ThemeProvider theme={activeTheme}>
       <CssBaseline />
-      {module === 'landing' ? <LandingPage onSelect={(next) => setModule(next)} /> : (
+      {module === 'landing' ? <LandingPage features={features} onSelect={(next) => setModule(next)} /> : (
       <Box className="app-shell">
         <Box component="header" className="topbar">
           <Box>
@@ -419,12 +584,22 @@ function App() {
             <Typography variant="body2" color="text.secondary">Healthcare integration debugging suite</Typography>
           </Box>
           <Tabs value={module} onChange={(_, next) => setModule(next)}>
+            {features.dashboard && <Tab value="dashboard" label="Dashboard" />}
             <Tab value="hl7" label="HL7" />
             <Tab value="icd10" label="ICD-10" />
             <Tab value="cpt" label="CPT/HCPCS" />
-            <Tab value="tools" label="Tools" />
+            {features.workspaces && <Tab value="workspaces" label="Workspaces" />}
+            {features.platformTools && <Tab value="tools" label="Tools" />}
           </Tabs>
-          <Button variant="outlined" startIcon={<HomeIcon />} onClick={() => setModule('landing')}>Solutions</Button>
+          <Box className="topbar-controls">
+            {features.darkMode && <Tooltip title="Toggle dark mode">
+              <Switch checked={darkMode} onChange={(event) => setDarkMode(event.target.checked)} inputProps={{ 'aria-label': 'Toggle dark mode' }} />
+            </Tooltip>}
+            <Tooltip title="Open help">
+              <Button variant="outlined" startIcon={<HelpOutlineIcon />} onClick={() => setHelpOpen(true)}>Help</Button>
+            </Tooltip>
+            <Button variant="outlined" startIcon={<HomeIcon />} onClick={() => setModule('landing')}>Solutions</Button>
+          </Box>
           <Box className="auth-actions">
             {currentUser ? (
               <>
@@ -442,6 +617,7 @@ function App() {
         </Box>
 
         <Alert severity="warning" className="phi-alert">Do not submit real PHI unless authorized to do so.</Alert>
+        {notification && <Alert severity="info" onClose={() => setNotification('')}>{notification}</Alert>}
         {authView && (
           <AuthPanel
             view={authView}
@@ -456,6 +632,9 @@ function App() {
           />
         )}
 
+        {features.dashboard && <Box className={`module-view ${module === 'dashboard' ? 'active' : ''}`}>
+          <DashboardModule currentUser={currentUser} requireAuth={requireAuth} setModule={setModule} notify={setNotification} features={features} />
+        </Box>}
         <Box className={`module-view ${module === 'hl7' ? 'active' : ''}`}>
         <Box className="hl7-module-head">
           <Box>
@@ -475,6 +654,9 @@ function App() {
             <Tooltip title="Save this validation for 24 hours">
               <Button variant="outlined" onClick={saveValidation} startIcon={<SaveIcon />}>Save</Button>
             </Tooltip>
+            {features.workspaces && <Tooltip title="Save as durable workspace">
+              <Button variant="outlined" onClick={saveHl7Workspace} startIcon={<SaveIcon />}>Workspace</Button>
+            </Tooltip>}
           </Box>
         </Box>
         <Box className="workspace">
@@ -537,21 +719,25 @@ function App() {
         </Box>
         </Box>
         <Box className={`module-view ${module === 'icd10' ? 'active' : ''}`}>
-          <Icd10Module requireAuth={requireAuth} />
+          <Icd10Module requireAuth={requireAuth} features={features} />
         </Box>
         <Box className={`module-view ${module === 'cpt' ? 'active' : ''}`}>
-          <CptModule />
+          <CptModule currentUser={currentUser} requireAuth={requireAuth} features={features} />
         </Box>
-        <Box className={`module-view ${module === 'tools' ? 'active' : ''}`}>
-          <PlatformToolsModule />
-        </Box>
+        {features.workspaces && <Box className={`module-view ${module === 'workspaces' ? 'active' : ''}`}>
+          <WorkspacesModule requireAuth={requireAuth} notify={setNotification} />
+        </Box>}
+        {features.platformTools && <Box className={`module-view ${module === 'tools' ? 'active' : ''}`}>
+          <PlatformToolsModule features={features} currentUser={currentUser} requireAuth={requireAuth} />
+        </Box>}
+        <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
       </Box>
       )}
     </ThemeProvider>
   );
 }
 
-function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'landing'>) => void }) {
+function LandingPage({ features, onSelect }: { features: FeatureFlags; onSelect: (module: Exclude<ModuleName, 'landing'>) => void }) {
   return (
     <Box className="landing-page">
       <Box className="landing-hero" sx={{ backgroundImage: `linear-gradient(90deg, rgba(9, 28, 31, 0.86), rgba(9, 28, 31, 0.48), rgba(9, 28, 31, 0.16)), url(${heroImage})` }}>
@@ -561,7 +747,7 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
             <Button color="inherit" onClick={() => onSelect('hl7')}>HL7</Button>
             <Button color="inherit" onClick={() => onSelect('icd10')}>ICD-10</Button>
             <Button color="inherit" onClick={() => onSelect('cpt')}>CPT</Button>
-            <Button color="inherit" onClick={() => onSelect('tools')}>Tools</Button>
+            {features.platformTools && <Button color="inherit" onClick={() => onSelect('tools')}>Tools</Button>}
           </Box>
         </Box>
         <Box className="landing-copy">
@@ -571,7 +757,7 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
             <Button size="large" variant="contained" startIcon={<HubIcon />} onClick={() => onSelect('hl7')}>Open HL7 Decoder</Button>
             <Button size="large" variant="outlined" color="inherit" startIcon={<LocalOfferIcon />} onClick={() => onSelect('icd10')}>Open ICD-10 Search</Button>
             <Button size="large" variant="outlined" color="inherit" startIcon={<LocalOfferIcon />} onClick={() => onSelect('cpt')}>Open CPT Search</Button>
-            <Button size="large" variant="outlined" color="inherit" startIcon={<SearchIcon />} onClick={() => onSelect('tools')}>Open Platform Tools</Button>
+            {features.platformTools && <Button size="large" variant="outlined" color="inherit" startIcon={<SearchIcon />} onClick={() => onSelect('tools')}>Open Platform Tools</Button>}
           </Box>
         </Box>
       </Box>
@@ -592,13 +778,13 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
               <small>Convert diagnosis text into grouped ICD-10-CM code suggestions.</small>
             </span>
           </button>
-          <button type="button" className="solution-card" onClick={() => onSelect('tools')}>
+          {features.platformTools && <button type="button" className="solution-card" onClick={() => onSelect('tools')}>
             <span className="solution-icon"><SearchIcon /></span>
             <span>
               <strong>Platform Tools</strong>
               <small>Repair HL7, convert FHIR, generate test data, decode X12, and check medical necessity.</small>
             </span>
-          </button>
+          </button>}
           <button type="button" className="solution-card" onClick={() => onSelect('cpt')}>
             <span className="solution-icon"><LocalOfferIcon /></span>
             <span>
@@ -609,6 +795,156 @@ function LandingPage({ onSelect }: { onSelect: (module: Exclude<ModuleName, 'lan
         </Box>
       </Box>
     </Box>
+  );
+}
+
+function DashboardModule({
+  currentUser,
+  requireAuth,
+  setModule,
+  notify,
+  features
+}: {
+  currentUser: AuthUser | null;
+  requireAuth: () => boolean;
+  setModule: (module: ModuleName) => void;
+  notify: (message: string) => void;
+  features: FeatureFlags;
+}) {
+  const [records, setRecords] = React.useState<WorkspaceRecord[]>([]);
+  const [pinnedIds, setPinnedIds] = React.useState<string[]>(() => JSON.parse(window.localStorage.getItem('healthcareHeroPinnedWorkspaces') ?? '[]'));
+  const [status, setStatus] = React.useState('');
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    if (currentUser) {
+      void loadRecent();
+    }
+  }, [currentUser]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem('healthcareHeroPinnedWorkspaces', JSON.stringify(pinnedIds));
+  }, [pinnedIds]);
+
+  async function loadRecent() {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Loading recent work...');
+    setError('');
+    try {
+      setRecords(await getJson<WorkspaceRecord[]>('/api/workspaces'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Dashboard load failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  function togglePin(record: WorkspaceRecord) {
+    setPinnedIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : [record.id, ...current]);
+    notify('Pinned work updated.');
+  }
+
+  const pinned = records.filter((record) => pinnedIds.includes(record.id));
+  const recent = records.slice(0, 8);
+
+  return (
+    <Box className="dashboard-workspace">
+      <Box className="pane-head">
+        <Box>
+          <Typography variant="h6" fontWeight={800}>Project Dashboard</Typography>
+          <Typography variant="caption" color="text.secondary">{currentUser ? `${currentUser.organizationName} | ${records.length} saved item${records.length === 1 ? '' : 's'}` : 'Log in to see saved work'}</Typography>
+        </Box>
+        <Box className="tool-button-row">
+          <Button variant="outlined" onClick={() => setModule('hl7')}>HL7</Button>
+          <Button variant="outlined" onClick={() => setModule('icd10')}>ICD-10</Button>
+          <Button variant="outlined" onClick={() => setModule('cpt')}>CPT/HCPCS</Button>
+          <Button variant="contained" onClick={loadRecent}>Refresh</Button>
+        </Box>
+      </Box>
+      {status && <Alert severity="info">{status}</Alert>}
+      {error && <Alert severity="error">{error}</Alert>}
+      <Box className="dashboard-grid">
+        <DashboardList title="Pinned Work" records={pinned} pinnedIds={pinnedIds} onPin={togglePin} emptyText="Pin important records from recent work." />
+        <DashboardList title="Recent Work" records={recent} pinnedIds={pinnedIds} onPin={togglePin} emptyText="Recent authenticated workspace records appear here." />
+        <Box className="dashboard-panel">
+          <Typography variant="subtitle1" fontWeight={800}>Onboarding Samples</Typography>
+          <Box className="sample-row dashboard-samples">
+            <Button variant="outlined" onClick={() => setModule('hl7')}>ORU HL7</Button>
+            <Button variant="outlined" onClick={() => setModule('icd10')}>Diagnosis Search</Button>
+            <Button variant="outlined" onClick={() => setModule('cpt')}>ICD/CPT Check</Button>
+            {features.platformTools && <Button variant="outlined" onClick={() => setModule('tools')}>X12/FHIR Tools</Button>}
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function DashboardList({
+  title,
+  records,
+  pinnedIds,
+  onPin,
+  emptyText
+}: {
+  title: string;
+  records: WorkspaceRecord[];
+  pinnedIds: string[];
+  onPin: (record: WorkspaceRecord) => void;
+  emptyText: string;
+}) {
+  return (
+    <Box className="dashboard-panel">
+      <Typography variant="subtitle1" fontWeight={800}>{title}</Typography>
+      <Box className="workspace-record-list">
+        {records.map((record) => (
+          <Box className="dashboard-record" key={record.id}>
+            <Box>
+              <Typography variant="body2" fontWeight={800}>{record.title}</Typography>
+              <Typography variant="caption" color="text.secondary">{record.recordType.replace(/_/g, ' ')} | {new Date(record.updatedAt).toLocaleString()}</Typography>
+            </Box>
+            <Tooltip title={pinnedIds.includes(record.id) ? 'Unpin' : 'Pin'}>
+              <Button size="small" variant="outlined" startIcon={<PushPinIcon />} onClick={() => onPin(record)}>
+                {pinnedIds.includes(record.id) ? 'Pinned' : 'Pin'}
+              </Button>
+            </Tooltip>
+          </Box>
+        ))}
+        {records.length === 0 && <Alert severity="info">{emptyText}</Alert>}
+      </Box>
+    </Box>
+  );
+}
+
+function HelpDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Drawer anchor="right" open={open} onClose={onClose}>
+      <Box className="help-drawer">
+        <Box className="pane-head">
+          <Typography variant="h6" fontWeight={800}>Help</Typography>
+          <Button variant="outlined" onClick={onClose}>Close</Button>
+        </Box>
+        <Alert severity="warning">Examples are synthetic. Confirm coding, billing, and clinical documentation with authorized reviewers before operational use.</Alert>
+        <Box>
+          <Typography variant="subtitle2" fontWeight={800}>Examples</Typography>
+          <ul className="compact-list">
+            <li>HL7: ORU messages with PID, OBR, and OBX segments.</li>
+            <li>ICD-10: diabetes with kidney disease, left ankle sprain initial encounter.</li>
+            <li>CPT/HCPCS: chest x-ray 2 views, A1c, 93000.</li>
+            <li>Platform Tools: X12 837/270, FHIR Bundle JSON, prior authorization notes.</li>
+          </ul>
+        </Box>
+        <Box>
+          <Typography variant="subtitle2" fontWeight={800}>Shortcuts</Typography>
+          <ul className="compact-list">
+            <li>Cmd/Ctrl + 1-6 switches modules.</li>
+            <li>? opens or closes this drawer.</li>
+          </ul>
+        </Box>
+      </Box>
+    </Drawer>
   );
 }
 
@@ -845,7 +1181,7 @@ function IssueList({ issues, onSelect, selectedLocation }: { issues: ValidationI
   );
 }
 
-function Icd10Module({ requireAuth }: { requireAuth: () => boolean }) {
+function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; features: FeatureFlags }) {
   const [inputText, setInputText] = React.useState('patient has chronic left knee pain and shortness of breath');
   const [result, setResult] = React.useState<Icd10Response | null>(null);
   const [status, setStatus] = React.useState('');
@@ -915,6 +1251,29 @@ function Icd10Module({ requireAuth }: { requireAuth: () => boolean }) {
       setStatus(`Saved until ${new Date(saved.expiresAt).toLocaleString()}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save request failed.');
+      setStatus('');
+    }
+  }
+
+  async function saveIcdWorkspace() {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Saving ICD-10 workspace...');
+    setError('');
+    try {
+      const saved = await postJson<WorkspaceRecord>('/api/workspaces', {
+        recordType: selectedCodes.length > 0 ? 'ICD10_CODE_LIST' : 'ICD10_SEARCH',
+        title: selectedCodes.length > 0 ? `ICD-10 list (${selectedCodes.length})` : 'ICD-10 search',
+        folder: 'ICD-10',
+        tags: 'icd10,coding',
+        notes: inputText,
+        visibility: 'TEAM',
+        payload: { inputText, selectedCodes, result }
+      });
+      setStatus(`Workspace saved: ${saved.title}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace save failed.');
       setStatus('');
     }
   }
@@ -1023,6 +1382,7 @@ function Icd10Module({ requireAuth }: { requireAuth: () => boolean }) {
               <Button variant="outlined" onClick={refineInput} startIcon={<SearchIcon />}>Refine</Button>
               <Button variant="outlined" onClick={() => { updateInputText(''); setResult(null); setAutocompleteSuggestions([]); }} startIcon={<ClearAllIcon />}>Clear</Button>
               <Button variant="outlined" onClick={saveSearch} startIcon={<SaveIcon />}>Save</Button>
+              {features.workspaces && <Button variant="outlined" onClick={saveIcdWorkspace} startIcon={<SaveIcon />}>Workspace</Button>}
             </Box>
           </Box>
           <textarea
@@ -1198,7 +1558,7 @@ function Icd10Module({ requireAuth }: { requireAuth: () => boolean }) {
   );
 }
 
-function CptModule() {
+function CptModule({ currentUser, requireAuth, features }: { currentUser: AuthUser | null; requireAuth: () => boolean; features: FeatureFlags }) {
   const [procedureQuery, setProcedureQuery] = React.useState('chest x-ray 2 views');
   const [searchResult, setSearchResult] = React.useState<ProcedureSearchResponse | null>(null);
   const [diagnosisText, setDiagnosisText] = React.useState('cough');
@@ -1210,6 +1570,12 @@ function CptModule() {
   const [status, setStatus] = React.useState('');
   const [error, setError] = React.useState('');
   const [copiedText, setCopiedText] = React.useState('');
+  const [importType, setImportType] = React.useState('ICD10_CM');
+  const [importVersion, setImportVersion] = React.useState('2026');
+  const [importSource, setImportSource] = React.useState('CMS import');
+  const [importContent, setImportContent] = React.useState('R05.9,Cough unspecified,Cough unspecified,Symptoms signs and abnormal clinical findings,2026-10-01,,true,,CMS ICD-10-CM,,1.0');
+  const [importJobs, setImportJobs] = React.useState<CodeSetImportJobResponse[]>([]);
+  const [importJobFilter, setImportJobFilter] = React.useState('');
 
   React.useEffect(() => {
     const query = procedureQuery.trim();
@@ -1278,6 +1644,104 @@ function CptModule() {
     setStatus('');
   }
 
+  async function saveCptWorkspace(recordType: string) {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Saving CPT/HCPCS workspace...');
+    setError('');
+    try {
+      const saved = await postJson<WorkspaceRecord>('/api/workspaces', {
+        recordType,
+        title: recordType === 'ICD_CPT_CHECK' ? `${icd10Code || 'ICD'} / ${procedureCode || 'CPT'} check` : 'CPT/HCPCS code list',
+        folder: 'CPT-HCPCS',
+        tags: 'cpt,hcpcs,coding',
+        notes: recordType === 'ICD_CPT_CHECK' ? compatibility?.reason ?? '' : procedureQuery,
+        visibility: 'TEAM',
+        payload: { procedureQuery, searchResult, diagnosisText, icd10Code, procedureText, procedureCode, payer, compatibility }
+      });
+      setStatus(`Workspace saved: ${saved.title}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace save failed.');
+      setStatus('');
+    }
+  }
+
+  async function loadImports() {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Loading imports...');
+    setError('');
+    try {
+      setImportJobs(await getJson<CodeSetImportJobResponse[]>('/api/admin/imports'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import history failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function runImport() {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Importing code data...');
+    setError('');
+    try {
+      const job = await postJson<CodeSetImportJobResponse>('/api/admin/imports', {
+        codeSetType: importType,
+        codeSetVersion: importVersion,
+        sourceName: importSource,
+        defaultEffectiveDate: '2026-01-01',
+        activate: true,
+        content: importContent
+      });
+      setImportJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      setStatus(`Imported ${job.importedRows} row${job.importedRows === 1 ? '' : 's'}; ${job.rejectedRows} rejected.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import failed.');
+      setStatus('');
+    }
+  }
+
+  async function rollbackImport(id: string) {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Rolling back import...');
+    setError('');
+    try {
+      const job = await postJson<CodeSetImportJobResponse>(`/api/admin/imports/${id}/rollback`, {});
+      setImportJobs((current) => current.map((item) => item.id === id ? job : item));
+      setStatus('Import rolled back.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Rollback failed.');
+      setStatus('');
+    }
+  }
+
+  async function loadImportFile(file: File | null) {
+    if (!file) {
+      return;
+    }
+    setStatus(`Loading ${file.name}...`);
+    setError('');
+    try {
+      setImportContent(await file.text());
+      setImportSource(file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'File load failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  const visibleImportJobs = importJobs.filter((job) => {
+    const haystack = `${job.codeSetType} ${job.codeSetVersion} ${job.sourceName} ${job.status}`.toLowerCase();
+    return haystack.includes(importJobFilter.toLowerCase());
+  });
+
   return (
     <Box className="cpt-workspace">
       <Box className="cpt-main">
@@ -1289,6 +1753,7 @@ function CptModule() {
             </Box>
             <Box className="toolbar">
               <Button variant="contained" onClick={() => search()} startIcon={<SearchIcon />}>Search</Button>
+              {features.workspaces && <Button variant="outlined" onClick={() => saveCptWorkspace('CPT_HCPCS_CODE_LIST')} startIcon={<SaveIcon />}>Workspace</Button>}
               <Button variant="outlined" onClick={() => { setProcedureQuery(''); setSearchResult(null); }} startIcon={<ClearAllIcon />}>Clear</Button>
             </Box>
           </Box>
@@ -1355,6 +1820,7 @@ function CptModule() {
           <Typography variant="subtitle1" fontWeight={700}>ICD/CPT Check</Typography>
           <Box className="tool-button-row">
             <Button size="small" variant="outlined" onClick={clearCompatibilityCheck} startIcon={<ClearAllIcon />}>Clear</Button>
+            {features.workspaces && <Button size="small" variant="outlined" onClick={() => saveCptWorkspace('ICD_CPT_CHECK')} startIcon={<SaveIcon />}>Workspace</Button>}
             <Button size="small" variant="contained" onClick={checkCompatibility}>Check</Button>
           </Box>
         </Box>
@@ -1387,16 +1853,314 @@ function CptModule() {
           </Box>
         )}
       </Box>
+      {features.adminImports && <Box className="selected-panel cpt-import-panel">
+        <Box className="pane-head">
+          <Box>
+            <Typography variant="subtitle1" fontWeight={700}>Code Imports</Typography>
+            <Typography variant="caption" color="text.secondary">ICD-10-CM, HCPCS, CPT, rules, policies, synonyms</Typography>
+          </Box>
+          <Button size="small" variant="outlined" onClick={loadImports}>History</Button>
+        </Box>
+        <Box className="tool-form-row cpt-check-form">
+          <label>Type
+            <select value={importType} onChange={(event) => setImportType(event.target.value)}>
+              <option value="ICD10_CM">ICD-10-CM</option>
+              <option value="HCPCS">HCPCS</option>
+              <option value="CPT">Licensed CPT</option>
+              <option value="PAYER_RULE">Payer rule</option>
+              <option value="LCD_NCD_POLICY">LCD/NCD policy</option>
+              <option value="SYNONYM">Synonym</option>
+            </select>
+          </label>
+          <label>Version <input value={importVersion} onChange={(event) => setImportVersion(event.target.value)} /></label>
+          <label>Source <input value={importSource} onChange={(event) => setImportSource(event.target.value)} /></label>
+          <label>CSV/JSON file <input type="file" accept=".csv,.json,.txt" onChange={(event) => loadImportFile(event.target.files?.[0] ?? null)} /></label>
+          <textarea
+            className="import-textarea"
+            value={importContent}
+            onChange={(event) => setImportContent(event.target.value)}
+            placeholder="CSV rows. ICD: code,short,long,chapter,effective,termination,active,replacement,source,provenance,confidence"
+          />
+          <Box className="tool-button-row">
+            <Button variant="contained" onClick={runImport}>Import</Button>
+            <Button variant="outlined" onClick={() => setImportContent('')}>Clear</Button>
+          </Box>
+        </Box>
+        {!currentUser && <Alert severity="info">Log in as an admin to import or roll back code data.</Alert>}
+        {importJobs.length > 0 && (
+          <Box className="import-job-list">
+            <Box className="tool-form-row">
+              <label>Filter results <input value={importJobFilter} onChange={(event) => setImportJobFilter(event.target.value)} /></label>
+            </Box>
+            {visibleImportJobs.map((job) => (
+              <Box className="import-job" key={job.id}>
+                <Box>
+                  <Typography variant="body2" fontWeight={800}>{job.codeSetType} {job.codeSetVersion}</Typography>
+                  <Typography variant="caption" color="text.secondary">{job.status} | {job.importedRows}/{job.totalRows} imported | {job.rejectedRows} rejected</Typography>
+                  {job.validationSummary && <Typography variant="caption" className="import-summary">{job.validationSummary}</Typography>}
+                </Box>
+                <Button size="small" variant="outlined" disabled={job.status === 'ROLLED_BACK'} onClick={() => rollbackImport(job.id)}>Rollback</Button>
+              </Box>
+            ))}
+          </Box>
+        )}
+      </Box>}
     </Box>
   );
 }
 
-function PlatformToolsModule() {
+function WorkspacesModule({ requireAuth, notify }: { requireAuth: () => boolean; notify: (message: string) => void }) {
+  const [records, setRecords] = React.useState<WorkspaceRecord[]>([]);
+  const [selected, setSelected] = React.useState<WorkspaceRecord | null>(null);
+  const [activity, setActivity] = React.useState<WorkspaceActivity[]>([]);
+  const [query, setQuery] = React.useState('');
+  const [type, setType] = React.useState('');
+  const [sort, setSort] = React.useState('updated-desc');
+  const [pinnedIds, setPinnedIds] = React.useState<string[]>(() => JSON.parse(window.localStorage.getItem('healthcareHeroPinnedWorkspaces') ?? '[]'));
+  const [status, setStatus] = React.useState('');
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    if (authToken) {
+      void loadWorkspaces();
+    }
+  }, []);
+
+  React.useEffect(() => {
+    window.localStorage.setItem('healthcareHeroPinnedWorkspaces', JSON.stringify(pinnedIds));
+  }, [pinnedIds]);
+
+  async function loadWorkspaces(nextQuery = query, nextType = type) {
+    if (!requireAuth()) {
+      return;
+    }
+    setStatus('Loading workspaces...');
+    setError('');
+    try {
+      const params = new URLSearchParams();
+      if (nextQuery.trim()) {
+        params.set('q', nextQuery.trim());
+      }
+      if (nextType) {
+        params.set('type', nextType);
+      }
+      setRecords(await getJson<WorkspaceRecord[]>(`/api/workspaces${params.toString() ? `?${params}` : ''}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace load failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function selectWorkspace(record: WorkspaceRecord) {
+    setSelected(record);
+    setActivity([]);
+    try {
+      setActivity(await getJson<WorkspaceActivity[]>(`/api/workspaces/${record.id}/activity`));
+    } catch {
+      setActivity([]);
+    }
+  }
+
+  async function updateSelected(changes: Partial<Pick<WorkspaceRecord, 'title' | 'folder' | 'tags' | 'notes' | 'visibility'>>) {
+    if (!selected) {
+      return;
+    }
+    setStatus('Updating workspace...');
+    setError('');
+    try {
+      const updated = await patchJson<WorkspaceRecord>(`/api/workspaces/${selected.id}`, changes);
+      setSelected(updated);
+      setRecords((current) => current.map((item) => item.id === updated.id ? updated : item));
+      await selectWorkspace(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace update failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function duplicateWorkspace(record: WorkspaceRecord) {
+    setStatus('Duplicating workspace...');
+    setError('');
+    try {
+      const copy = await postJson<WorkspaceRecord>(`/api/workspaces/${record.id}/duplicate`, {});
+      setRecords((current) => [copy, ...current]);
+      setSelected(copy);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace duplicate failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  async function deleteWorkspace(record: WorkspaceRecord) {
+    setStatus('Deleting workspace...');
+    setError('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/workspaces/${record.id}`, { method: 'DELETE', headers: authHeaders() });
+      if (!response.ok) {
+        throw new Error(await errorMessage(response));
+      }
+      setRecords((current) => current.filter((item) => item.id !== record.id));
+      if (selected?.id === record.id) {
+        setSelected(null);
+        setActivity([]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Workspace delete failed.');
+    } finally {
+      setStatus('');
+    }
+  }
+
+  const payloadJson = selected ? JSON.stringify(selected.payload, null, 2) : '';
+  const visibleRecords = [...records].sort((a, b) => {
+    if (sort === 'title') {
+      return a.title.localeCompare(b.title);
+    }
+    if (sort === 'type') {
+      return a.recordType.localeCompare(b.recordType);
+    }
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  async function copyPayload() {
+    if (!payloadJson) {
+      return;
+    }
+    await navigator.clipboard.writeText(payloadJson);
+    notify('Workspace payload copied.');
+  }
+
+  function exportPayload() {
+    if (!selected) {
+      return;
+    }
+    const blob = new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${selected.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'workspace'}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notify('Workspace JSON export created.');
+  }
+
+  function togglePin(record: WorkspaceRecord) {
+    setPinnedIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : [record.id, ...current]);
+    notify('Pinned work updated.');
+  }
+
+  return (
+    <Box className="workspace-manager">
+      <Box className="workspace-list-panel">
+        <Box className="pane-head">
+          <Box>
+            <Typography variant="subtitle1" fontWeight={700}>Saved Workspaces</Typography>
+            {status && <Typography variant="caption" color="text.secondary">{status}</Typography>}
+          </Box>
+          <Button variant="contained" onClick={() => loadWorkspaces()}>Refresh</Button>
+        </Box>
+        <Box className="tool-form-row">
+          <label>Search <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadWorkspaces(); }} /></label>
+          <label>Type
+            <select value={type} onChange={(event) => { setType(event.target.value); void loadWorkspaces(query, event.target.value); }}>
+              <option value="">All</option>
+              <option value="HL7_PROJECT">HL7 projects</option>
+              <option value="ICD10_CODE_LIST">ICD-10 lists</option>
+              <option value="CPT_HCPCS_CODE_LIST">CPT/HCPCS lists</option>
+              <option value="ICD_CPT_CHECK">ICD/CPT checks</option>
+            </select>
+          </label>
+          <label>Sort
+            <select value={sort} onChange={(event) => setSort(event.target.value)}>
+              <option value="updated-desc">Updated newest</option>
+              <option value="title">Title</option>
+              <option value="type">Type</option>
+            </select>
+          </label>
+        </Box>
+        {error && <Alert severity="error">{error}</Alert>}
+        <Box className="workspace-record-list">
+          {visibleRecords.map((record) => (
+            <button className={`workspace-record-button ${selected?.id === record.id ? 'selected-workspace' : ''}`} key={record.id} onClick={() => selectWorkspace(record)} type="button">
+              <strong>{record.title}</strong>
+              <span>{record.recordType.replace(/_/g, ' ')} | {record.folder || 'No folder'} | {new Date(record.updatedAt).toLocaleString()}</span>
+              {record.tags && <small>{record.tags}</small>}
+            </button>
+          ))}
+          {records.length === 0 && <Alert severity="info">No workspaces found.</Alert>}
+        </Box>
+      </Box>
+
+      <Box className="workspace-detail-panel">
+        {selected ? (
+          <>
+            <Box className="pane-head">
+              <Box>
+                <Typography variant="subtitle1" fontWeight={700}>{selected.title}</Typography>
+                <Typography variant="caption" color="text.secondary">{selected.recordType.replace(/_/g, ' ')} | {selected.visibility}</Typography>
+              </Box>
+              <Box className="tool-button-row">
+                <Button variant="outlined" startIcon={<PushPinIcon />} onClick={() => togglePin(selected)}>{pinnedIds.includes(selected.id) ? 'Unpin' : 'Pin'}</Button>
+                <Button variant="outlined" startIcon={<ContentCopyIcon />} onClick={copyPayload}>Copy JSON</Button>
+                <Button variant="outlined" startIcon={<DownloadIcon />} onClick={exportPayload}>Export JSON</Button>
+                <Button variant="outlined" onClick={() => duplicateWorkspace(selected)}>Duplicate</Button>
+                <Button variant="outlined" color="error" onClick={() => deleteWorkspace(selected)}>Delete</Button>
+              </Box>
+            </Box>
+            <Box className="tool-form-row cpt-check-form">
+              <label>Title <input value={selected.title} onChange={(event) => setSelected({ ...selected, title: event.target.value })} onBlur={() => updateSelected({ title: selected.title })} /></label>
+              <label>Folder <input value={selected.folder ?? ''} onChange={(event) => setSelected({ ...selected, folder: event.target.value })} onBlur={() => updateSelected({ folder: selected.folder ?? '' })} /></label>
+              <label>Tags <input value={selected.tags ?? ''} onChange={(event) => setSelected({ ...selected, tags: event.target.value })} onBlur={() => updateSelected({ tags: selected.tags ?? '' })} /></label>
+              <label>Visibility
+                <select value={selected.visibility} onChange={(event) => updateSelected({ visibility: event.target.value })}>
+                  <option value="PRIVATE">Private</option>
+                  <option value="TEAM">Team</option>
+                  <option value="READ_ONLY">Read only</option>
+                </select>
+              </label>
+              <label>Notes <input value={selected.notes ?? ''} onChange={(event) => setSelected({ ...selected, notes: event.target.value })} onBlur={() => updateSelected({ notes: selected.notes ?? '' })} /></label>
+            </Box>
+            <Box className="tool-output">
+              <Typography variant="subtitle2" fontWeight={800}>Payload</Typography>
+              <pre className="json-view">{payloadJson}</pre>
+            </Box>
+            <Box className="tool-output">
+              <Typography variant="subtitle2" fontWeight={800}>Activity</Typography>
+              <ul className="compact-list">
+                {activity.map((item) => <li key={`${item.occurredAt}-${item.action}`}>{new Date(item.occurredAt).toLocaleString()} - {item.action}: {item.detail}</li>)}
+              </ul>
+            </Box>
+          </>
+        ) : (
+          <Alert severity="info">Select a workspace to view payload, notes, sharing, and activity.</Alert>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function PlatformToolsModule({ features, currentUser, requireAuth }: { features: FeatureFlags; currentUser: AuthUser | null; requireAuth: () => boolean }) {
+  type PlatformToolPage = 'repair' | 'hl7-fhir' | 'fhir-hl7' | 'synthetic' | 'x12' | 'necessity' | 'roadmap' | 'ai';
+  const toolPages: { id: PlatformToolPage; label: string }[] = [
+    { id: 'repair', label: 'HL7 Repair' },
+    { id: 'hl7-fhir', label: 'HL7 to FHIR' },
+    { id: 'fhir-hl7', label: 'FHIR to HL7' },
+    { id: 'synthetic', label: 'Synthetic Data' },
+    { id: 'x12', label: 'X12 Decoder' },
+    { id: 'necessity', label: 'Medical Necessity' },
+    { id: 'roadmap', label: 'Roadmap Engines' },
+    ...(features.aiAssist ? [{ id: 'ai' as PlatformToolPage, label: 'AI Review' }] : [])
+  ];
+  const [activeToolPage, setActiveToolPage] = React.useState<PlatformToolPage>('repair');
   const [repairInput, setRepairInput] = React.useState(sampleMessage);
   const [repairResult, setRepairResult] = React.useState<Hl7RepairResponse | null>(null);
   const [profileResult, setProfileResult] = React.useState<GenericPlatformResponse | null>(null);
   const [fhirInput, setFhirInput] = React.useState(sampleMessage);
   const [fhirResult, setFhirResult] = React.useState<FhirConversionResponse | null>(null);
+  const [fhirUtilityResult, setFhirUtilityResult] = React.useState<GenericPlatformResponse | null>(null);
   const [fhirToHl7Input, setFhirToHl7Input] = React.useState(sampleFhir);
   const [fhirToHl7Result, setFhirToHl7Result] = React.useState<GenericPlatformResponse | null>(null);
   const [syntheticCount, setSyntheticCount] = React.useState(3);
@@ -1405,6 +2169,7 @@ function PlatformToolsModule() {
   const [syntheticManifest, setSyntheticManifest] = React.useState<GenericPlatformResponse | null>(null);
   const [x12Input, setX12Input] = React.useState(sampleX12);
   const [x12Result, setX12Result] = React.useState<X12DecodeResponse | null>(null);
+  const [x12RevenueResult, setX12RevenueResult] = React.useState<GenericPlatformResponse | null>(null);
   const [cptCode, setCptCode] = React.useState('83036');
   const [icdCodes, setIcdCodes] = React.useState('E11.9');
   const [payer, setPayer] = React.useState('Medicare');
@@ -1412,6 +2177,9 @@ function PlatformToolsModule() {
   const [roadmapText, setRoadmapText] = React.useState('Left knee pain MRI denied for medical necessity. Patient DOE^JANE has member ABC123.');
   const [roadmapResult, setRoadmapResult] = React.useState<GenericPlatformResponse | null>(null);
   const [roadmapEngine, setRoadmapEngine] = React.useState('prior-auth');
+  const [aiPromptType, setAiPromptType] = React.useState('DENIAL_ROOT_CAUSE');
+  const [aiText, setAiText] = React.useState('MRI knee denied for medical necessity. Patient DOE^JANE has member ABC123.');
+  const [aiResult, setAiResult] = React.useState<AiAssistResponse | null>(null);
   const [status, setStatus] = React.useState('');
   const [error, setError] = React.useState('');
   const [copiedText, setCopiedText] = React.useState('');
@@ -1436,13 +2204,89 @@ function PlatformToolsModule() {
     }, 1400);
   }
 
+  function clearToolState() {
+    setStatus('');
+    setError('');
+    setCopiedText('');
+  }
+
+  function clearRepairTool() {
+    setRepairInput('');
+    setRepairResult(null);
+    setProfileResult(null);
+    clearToolState();
+  }
+
+  function clearHl7ToFhirTool() {
+    setFhirInput('');
+    setFhirResult(null);
+    setFhirUtilityResult(null);
+    clearToolState();
+  }
+
+  function clearFhirToHl7Tool() {
+    setFhirToHl7Input('');
+    setFhirToHl7Result(null);
+    clearToolState();
+  }
+
+  function clearSyntheticTool() {
+    setSyntheticCount(3);
+    setSyntheticDiagnosis('');
+    setSyntheticResult(null);
+    setSyntheticManifest(null);
+    clearToolState();
+  }
+
+  function clearX12Tool() {
+    setX12Input('');
+    setX12Result(null);
+    setX12RevenueResult(null);
+    clearToolState();
+  }
+
+  function clearNecessityTool() {
+    setCptCode('');
+    setIcdCodes('');
+    setPayer('');
+    setNecessityResult(null);
+    clearToolState();
+  }
+
+  function clearRoadmapTool() {
+    setRoadmapText('');
+    setRoadmapResult(null);
+    clearToolState();
+  }
+
+  function clearAiTool() {
+    setAiText('');
+    setAiResult(null);
+    clearToolState();
+  }
+
+  function runAiReview() {
+    if (!requireAuth()) {
+      return;
+    }
+    void run('Running PHI-safe AI review...', () => postJson<AiAssistResponse>('/api/ai/assist', {
+      promptType: aiPromptType,
+      inputText: aiText,
+      redactPhi: true,
+      requireHumanApproval: true
+    }), setAiResult);
+  }
+
   const repairedMessage = repairResult?.repairedMessage ?? '';
   const fhirJson = fhirResult ? JSON.stringify(fhirResult.bundle, null, 2) : '';
+  const fhirUtilityJson = fhirUtilityResult ? JSON.stringify(fhirUtilityResult, null, 2) : '';
   const fhirToHl7Message = typeof fhirToHl7Result?.message === 'string' ? fhirToHl7Result.message : '';
   const syntheticJson = syntheticResult ? JSON.stringify(syntheticResult, null, 2) : '';
   const roadmapJson = roadmapResult ? JSON.stringify(roadmapResult, null, 2) : '';
+  const aiJson = aiResult ? JSON.stringify(aiResult, null, 2) : '';
   const profileJson = profileResult ? JSON.stringify(profileResult, null, 2) : '';
   const manifestJson = syntheticManifest ? JSON.stringify(syntheticManifest, null, 2) : '';
+  const x12RevenueJson = x12RevenueResult ? JSON.stringify(x12RevenueResult, null, 2) : '';
 
   const roadmapEngines: { id: string; label: string; path: string }[] = [
     { id: 'prior-auth', label: 'Prior Auth', path: '/api/platform/prior-auth/analyze' },
@@ -1454,6 +2298,7 @@ function PlatformToolsModule() {
     { id: 'coding', label: 'AI Coding', path: '/api/platform/coding/assist' },
     { id: 'sandbox', label: 'API Sandbox', path: '/api/platform/sandbox/plan' },
     { id: 'eligibility', label: 'Eligibility', path: '/api/platform/eligibility/analyze' },
+    { id: 'payer', label: 'Payer Rules', path: '/api/platform/payer/requirements' },
     { id: 'compliance', label: 'Compliance', path: '/api/platform/compliance/scan' },
     { id: 'search', label: 'Global Search', path: '/api/platform/search' }
   ];
@@ -1461,6 +2306,12 @@ function PlatformToolsModule() {
   function selectedRoadmapEngine() {
     return roadmapEngines.find((engine) => engine.id === roadmapEngine) ?? roadmapEngines[0];
   }
+
+  React.useEffect(() => {
+    if (!toolPages.some((page) => page.id === activeToolPage)) {
+      setActiveToolPage('repair');
+    }
+  }, [activeToolPage, toolPages]);
 
   return (
     <Box className="tools-workspace">
@@ -1472,13 +2323,27 @@ function PlatformToolsModule() {
         <Chip label="MVP engines" variant="outlined" />
       </Box>
       {error && <Alert severity="error">{error}</Alert>}
+      <Box className="tool-page-nav">
+        {toolPages.map((page) => (
+          <Chip
+            key={page.id}
+            label={page.label}
+            color={activeToolPage === page.id ? 'primary' : 'default'}
+            variant={activeToolPage === page.id ? 'filled' : 'outlined'}
+            clickable
+            onClick={() => setActiveToolPage(page.id)}
+          />
+        ))}
+      </Box>
 
-      <Box className="tool-grid">
-        <Box className="tool-panel">
+      <Box className="tool-page">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'repair' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>HL7 Repair</Typography>
             <Box className="tool-button-row">
               <Button variant="outlined" onClick={() => run('Running profile validation...', () => postJson<GenericPlatformResponse>('/api/platform/hl7/profile-validate', { message: repairInput, mode: 'STANDARD' }), setProfileResult)}>Profile</Button>
+              <Button variant="outlined" onClick={() => run('Running HL7 deep analysis...', () => postJson<GenericPlatformResponse>('/api/platform/hl7/deep-analysis', { text: repairInput }), setProfileResult)}>Deep</Button>
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearRepairTool}>Clear</Button>
               <Button variant="contained" onClick={() => run('Repairing HL7...', () => postJson<Hl7RepairResponse>('/api/hl7/repair', { message: repairInput, mode: 'STANDARD' }), setRepairResult)}>Repair</Button>
             </Box>
           </Box>
@@ -1508,10 +2373,15 @@ function PlatformToolsModule() {
           )}
         </Box>
 
-        <Box className="tool-panel">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'hl7-fhir' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>HL7 to FHIR</Typography>
-            <Button variant="contained" onClick={() => run('Converting HL7 to FHIR...', () => postJson<FhirConversionResponse>('/api/platform/fhir/hl7-to-fhir', { text: fhirInput }), setFhirResult)}>Convert</Button>
+            <Box className="tool-button-row">
+              <Button variant="outlined" onClick={() => run('Validating FHIR...', () => postJson<GenericPlatformResponse>('/api/platform/fhir/validate', { text: fhirInput }), setFhirUtilityResult)}>Validate</Button>
+              <Button variant="outlined" onClick={() => run('Batch converting HL7 to FHIR...', () => postJson<GenericPlatformResponse>('/api/platform/fhir/batch-hl7-to-fhir', { text: fhirInput }), setFhirUtilityResult)}>Batch</Button>
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearHl7ToFhirTool}>Clear</Button>
+              <Button variant="contained" onClick={() => run('Converting HL7 to FHIR...', () => postJson<FhirConversionResponse>('/api/platform/fhir/hl7-to-fhir', { text: fhirInput }), setFhirResult)}>Convert</Button>
+            </Box>
           </Box>
           <textarea className="tool-textarea" value={fhirInput} onChange={(event) => setFhirInput(event.target.value)} />
           {fhirResult && (
@@ -1526,12 +2396,26 @@ function PlatformToolsModule() {
               <pre className="json-view">{fhirJson}</pre>
             </Box>
           )}
+          {fhirUtilityResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label="FHIR utility result" />
+                <Button size="small" variant="outlined" startIcon={copiedText === fhirUtilityJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(fhirUtilityJson)}>
+                  {copiedText === fhirUtilityJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <pre className="json-view">{fhirUtilityJson}</pre>
+            </Box>
+          )}
         </Box>
 
-        <Box className="tool-panel">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'fhir-hl7' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>FHIR to HL7</Typography>
-            <Button variant="contained" onClick={() => run('Converting FHIR to HL7...', () => postJson<GenericPlatformResponse>('/api/platform/fhir/fhir-to-hl7', { text: fhirToHl7Input }), setFhirToHl7Result)}>Convert</Button>
+            <Box className="tool-button-row">
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearFhirToHl7Tool}>Clear</Button>
+              <Button variant="contained" onClick={() => run('Converting FHIR to HL7...', () => postJson<GenericPlatformResponse>('/api/platform/fhir/fhir-to-hl7', { text: fhirToHl7Input }), setFhirToHl7Result)}>Convert</Button>
+            </Box>
           </Box>
           <textarea className="tool-textarea" value={fhirToHl7Input} onChange={(event) => setFhirToHl7Input(event.target.value)} />
           {fhirToHl7Result && (
@@ -1547,11 +2431,12 @@ function PlatformToolsModule() {
           )}
         </Box>
 
-        <Box className="tool-panel">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'synthetic' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>Synthetic Data</Typography>
             <Box className="tool-button-row">
               <Button variant="outlined" onClick={() => run('Loading export manifest...', () => postJson<GenericPlatformResponse>('/api/platform/synthetic/export-manifest', {}), setSyntheticManifest)}>Exports</Button>
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearSyntheticTool}>Clear</Button>
               <Button variant="contained" onClick={() => run('Generating synthetic data...', () => postJson<SyntheticDataResponse>('/api/platform/synthetic/generate', { count: syntheticCount, minAge: 18, maxAge: 90, diagnosis: syntheticDiagnosis }), setSyntheticResult)}>Generate</Button>
             </Box>
           </Box>
@@ -1584,10 +2469,15 @@ function PlatformToolsModule() {
           )}
         </Box>
 
-        <Box className="tool-panel">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'x12' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>X12 Decoder</Typography>
-            <Button variant="contained" onClick={() => run('Decoding X12...', () => postJson<X12DecodeResponse>('/api/platform/x12/decode', { text: x12Input }), setX12Result)}>Decode</Button>
+            <Box className="tool-button-row">
+              <Button variant="outlined" onClick={() => run('Generating 270...', () => postJson<GenericPlatformResponse>('/api/platform/x12/generate-270', { text: 'SYN000001' }), setX12RevenueResult)}>270</Button>
+              <Button variant="outlined" onClick={() => run('Analyzing revenue cycle...', () => postJson<GenericPlatformResponse>('/api/platform/x12/revenue-cycle', { text: x12Input }), setX12RevenueResult)}>Revenue</Button>
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearX12Tool}>Clear</Button>
+              <Button variant="contained" onClick={() => run('Decoding X12...', () => postJson<X12DecodeResponse>('/api/platform/x12/decode', { text: x12Input }), setX12Result)}>Decode</Button>
+            </Box>
           </Box>
           <textarea className="tool-textarea" value={x12Input} onChange={(event) => setX12Input(event.target.value)} />
           {x12Result && (
@@ -1613,16 +2503,30 @@ function PlatformToolsModule() {
               </table>
             </Box>
           )}
+          {x12RevenueResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip label="Revenue cycle" />
+                <Button size="small" variant="outlined" startIcon={copiedText === x12RevenueJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(x12RevenueJson)}>
+                  {copiedText === x12RevenueJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <pre className="json-view">{x12RevenueJson}</pre>
+            </Box>
+          )}
         </Box>
 
-        <Box className="tool-panel tool-panel-wide">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'necessity' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>Medical Necessity</Typography>
-            <Button variant="contained" onClick={() => run('Checking medical necessity...', () => postJson<MedicalNecessityResponse>('/api/platform/necessity/check', {
-              cptCode,
-              icd10Codes: icdCodes.split(/[\n, ]+/).filter(Boolean),
-              payer
-            }), setNecessityResult)}>Check</Button>
+            <Box className="tool-button-row">
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearNecessityTool}>Clear</Button>
+              <Button variant="contained" onClick={() => run('Checking medical necessity...', () => postJson<MedicalNecessityResponse>('/api/platform/necessity/check', {
+                cptCode,
+                icd10Codes: icdCodes.split(/[\n, ]+/).filter(Boolean),
+                payer
+              }), setNecessityResult)}>Check</Button>
+            </Box>
           </Box>
           <Box className="tool-form-row">
             <label>CPT <input value={cptCode} onChange={(event) => setCptCode(event.target.value)} /></label>
@@ -1644,13 +2548,16 @@ function PlatformToolsModule() {
           )}
         </Box>
 
-        <Box className="tool-panel tool-panel-wide">
+        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'roadmap' ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>Roadmap Engines</Typography>
-            <Button variant="contained" onClick={() => {
-              const engine = selectedRoadmapEngine();
-              run(`Running ${engine.label}...`, () => postJson<GenericPlatformResponse>(engine.path, { text: roadmapText }), setRoadmapResult);
-            }}>Run</Button>
+            <Box className="tool-button-row">
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearRoadmapTool}>Clear</Button>
+              <Button variant="contained" onClick={() => {
+                const engine = selectedRoadmapEngine();
+                run(`Running ${engine.label}...`, () => postJson<GenericPlatformResponse>(engine.path, { text: roadmapText }), setRoadmapResult);
+              }}>Run</Button>
+            </Box>
           </Box>
           <Box className="roadmap-engine-row">
             {roadmapEngines.map((engine) => (
@@ -1677,6 +2584,45 @@ function PlatformToolsModule() {
             </Box>
           )}
         </Box>
+
+        {features.aiAssist && <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'ai' ? 'tool-page-hidden' : ''}`}>
+          <Box className="pane-head">
+            <Typography variant="subtitle1" fontWeight={700}>AI Review</Typography>
+            <Box className="tool-button-row">
+              <Button variant="outlined" startIcon={<ClearAllIcon />} onClick={clearAiTool}>Clear</Button>
+              <Button variant="contained" onClick={runAiReview}>Review</Button>
+            </Box>
+          </Box>
+          {!currentUser && <Alert severity="info">Log in to use AI Review.</Alert>}
+          <Box className="tool-form-row">
+            <label>Prompt type
+              <select value={aiPromptType} onChange={(event) => setAiPromptType(event.target.value)}>
+                <option value="ICD_REFINEMENT">ICD refinement</option>
+                <option value="CPT_SUGGESTION">CPT suggestion</option>
+                <option value="PRIOR_AUTH_SUMMARY">Prior auth summary</option>
+                <option value="DENIAL_ROOT_CAUSE">Denial root cause</option>
+                <option value="DOCUMENTATION_SPECIFICITY">Documentation specificity</option>
+              </select>
+            </label>
+          </Box>
+          <textarea className="tool-textarea" value={aiText} onChange={(event) => setAiText(event.target.value)} />
+          {aiResult && (
+            <Box className="tool-output">
+              <Box className="tool-output-head">
+                <Chip color="warning" label={aiResult.approvalStatus.replace(/_/g, ' ')} />
+                <Chip label={`${aiResult.provider} | ${aiResult.model}`} />
+                <Chip label={aiResult.redacted ? 'PHI masked' : 'Unmasked'} />
+                <Button size="small" variant="outlined" startIcon={copiedText === aiJson ? <CheckIcon /> : <ContentCopyIcon />} onClick={() => copyText(aiJson)}>
+                  {copiedText === aiJson ? 'Copied' : 'Copy JSON'}
+                </Button>
+              </Box>
+              <Typography variant="body2">{aiResult.summary}</Typography>
+              <ul className="compact-list">
+                {[...aiResult.suggestions, ...aiResult.warnings].map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </Box>
+          )}
+        </Box>}
       </Box>
     </Box>
   );

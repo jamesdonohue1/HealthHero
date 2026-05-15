@@ -14,6 +14,8 @@ import com.hl7decoder.model.icd10.Icd10SavedSearchResponse;
 import com.hl7decoder.model.icd10.Icd10SearchResponse;
 import com.hl7decoder.model.icd10.Icd10SearchResult;
 import com.hl7decoder.model.icd10.Icd10SelectedCode;
+import com.hl7decoder.persistence.Icd10CodeEntity;
+import com.hl7decoder.persistence.Icd10CodeRepository;
 import com.hl7decoder.persistence.SavedIcd10Search;
 import com.hl7decoder.persistence.SavedIcd10SearchRepository;
 import com.lowagie.text.Document;
@@ -91,6 +93,7 @@ public class Icd10Service {
     private final RestClient restClient;
     private final String apiBaseUrl;
     private final SavedIcd10SearchRepository savedSearchRepository;
+    private final Icd10CodeRepository icd10CodeRepository;
     private final ObjectMapper objectMapper;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
     private final Map<String, Instant> pausedQueries = new ConcurrentHashMap<>();
@@ -98,16 +101,25 @@ public class Icd10Service {
     @Autowired
     public Icd10Service(RestClient.Builder restClientBuilder,
                         SavedIcd10SearchRepository savedSearchRepository,
+                        Icd10CodeRepository icd10CodeRepository,
                         ObjectMapper objectMapper,
                         @Value("${app.icd10.api-base-url:https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search}") String apiBaseUrl) {
         this.restClient = restClientBuilder.build();
         this.apiBaseUrl = apiBaseUrl;
         this.savedSearchRepository = savedSearchRepository;
+        this.icd10CodeRepository = icd10CodeRepository;
         this.objectMapper = objectMapper;
     }
 
+    public Icd10Service(RestClient.Builder restClientBuilder,
+                        SavedIcd10SearchRepository savedSearchRepository,
+                        ObjectMapper objectMapper,
+                        String apiBaseUrl) {
+        this(restClientBuilder, savedSearchRepository, null, objectMapper, apiBaseUrl);
+    }
+
     Icd10Service(RestClient.Builder restClientBuilder, String apiBaseUrl) {
-        this(restClientBuilder, null, new ObjectMapper().findAndRegisterModules(), apiBaseUrl);
+        this(restClientBuilder, null, null, new ObjectMapper().findAndRegisterModules(), apiBaseUrl);
     }
 
     public Icd10SearchResponse search(Icd10SearchRequest request) {
@@ -468,6 +480,32 @@ public class Icd10Service {
     private List<Icd10SearchResult> searchLocalConcept(String originalConcept, String queryConcept, int limit, double scorePenalty) {
         String query = normalize(queryConcept);
         List<Icd10SearchResult> results = new ArrayList<>();
+        if (icd10CodeRepository != null) {
+            for (Icd10CodeEntity entity : icd10CodeRepository.findTop25ByCodeContainingIgnoreCaseOrShortDescriptionContainingIgnoreCaseOrLongDescriptionContainingIgnoreCase(query, query, query)) {
+                String haystack = normalize(String.join(" ", entity.getCode(), entity.getShortDescription(), entity.getLongDescription(), entity.getChapter()));
+                if (!haystack.contains(query)) {
+                    continue;
+                }
+                double score = Math.min(0.99, Math.max(0.7, entity.getConfidence()) * scorePenalty);
+                results.add(new Icd10SearchResult(
+                        entity.getCode(),
+                        entity.getShortDescription(),
+                        entity.getLongDescription(),
+                        0,
+                        score,
+                        (int) Math.round(score * 100),
+                        entity.isActive() && entity.getTerminationDate() == null,
+                        entity.getChapter() == null || entity.getChapter().isBlank() ? chapter(entity.getCode()) : entity.getChapter(),
+                        importedReason(entity),
+                        queryConcept,
+                        !queryConcept.equals(originalConcept),
+                        source(entity)
+                ));
+                if (results.size() >= limit) {
+                    return results;
+                }
+            }
+        }
         for (LocalIcd10Code code : LOCAL_CODES) {
             String haystack = normalize(String.join(" ", code.code(), code.shortDescription(), code.longDescription(), String.join(" ", code.synonyms())));
             if (haystack.contains(query) || query.contains(normalize(code.shortDescription())) || code.synonyms().stream().anyMatch(synonym -> query.contains(normalize(synonym)))) {
@@ -489,6 +527,21 @@ public class Icd10Service {
             }
         }
         return results.stream().limit(limit).toList();
+    }
+
+    private String importedReason(Icd10CodeEntity entity) {
+        if (entity.isActive()) {
+            return "Matched imported ICD-10-CM code set version " + nullSafe(entity.getCodeSetVersion()) + ".";
+        }
+        String replacement = entity.getReplacementCode() == null || entity.getReplacementCode().isBlank()
+                ? ""
+                : " Replacement: " + entity.getReplacementCode() + ".";
+        return "Matched retired/deleted imported ICD-10-CM code." + replacement;
+    }
+
+    private String source(Icd10CodeEntity entity) {
+        String source = entity.getSource() == null || entity.getSource().isBlank() ? "Imported ICD-10-CM code set" : entity.getSource();
+        return source + (entity.getProvenance() == null || entity.getProvenance().isBlank() ? "" : " | " + entity.getProvenance());
     }
 
     private List<Icd10SearchResult> searchApiConcept(String originalConcept, String queryConcept, int limit, double scorePenalty) {

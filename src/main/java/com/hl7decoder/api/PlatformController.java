@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/platform")
+@RequestMapping({"/api/platform", "/api/v1/platform"})
 public class PlatformController {
     private final FhirConversionService fhirConversionService;
     private final SyntheticDataService syntheticDataService;
@@ -56,9 +56,24 @@ public class PlatformController {
         return platformRoadmapService.profileValidate(request.message(), request.mode());
     }
 
+    @PostMapping("/hl7/deep-analysis")
+    public java.util.Map<String, Object> hl7DeepAnalysis(@Valid @RequestBody TextRequest request) {
+        return platformRoadmapService.hl7DeepAnalysis(request.text());
+    }
+
     @PostMapping("/fhir/mapping-template")
     public java.util.Map<String, Object> mappingTemplate(@Valid @RequestBody TextRequest request) {
         return platformRoadmapService.mappingTemplate(request.text());
+    }
+
+    @PostMapping("/fhir/validate")
+    public java.util.Map<String, Object> validateFhir(@Valid @RequestBody TextRequest request) {
+        return fhirConversionService.validate(request.text(), "FHIR_R4_CORE");
+    }
+
+    @PostMapping("/fhir/batch-hl7-to-fhir")
+    public java.util.Map<String, Object> batchHl7ToFhir(@Valid @RequestBody TextRequest request) {
+        return fhirConversionService.batchHl7ToFhir(request.text());
     }
 
     @PostMapping("/synthetic/generate")
@@ -74,6 +89,16 @@ public class PlatformController {
     @PostMapping("/x12/decode")
     public X12DecodeResponse decodeX12(@Valid @RequestBody TextRequest request) {
         return x12Service.decode(request.text());
+    }
+
+    @PostMapping("/x12/revenue-cycle")
+    public java.util.Map<String, Object> revenueCycle(@Valid @RequestBody TextRequest request) {
+        return x12Service.revenueCycle(request.text());
+    }
+
+    @PostMapping("/x12/generate-270")
+    public java.util.Map<String, Object> generate270(@Valid @RequestBody TextRequest request) {
+        return x12Service.generate270(request.text());
     }
 
     @PostMapping("/necessity/check")
@@ -124,6 +149,11 @@ public class PlatformController {
     @PostMapping("/eligibility/analyze")
     public java.util.Map<String, Object> eligibility(@Valid @RequestBody TextRequest request) {
         return platformRoadmapService.eligibility(request.text());
+    }
+
+    @PostMapping("/payer/requirements")
+    public java.util.Map<String, Object> payerRequirements(@Valid @RequestBody TextRequest request) {
+        return platformRoadmapService.payerRequirements(request.text());
     }
 
     @PostMapping("/compliance/scan")
