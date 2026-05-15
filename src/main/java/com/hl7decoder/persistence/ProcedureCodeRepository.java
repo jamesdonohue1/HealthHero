@@ -13,4 +13,6 @@ public interface ProcedureCodeRepository extends JpaRepository<ProcedureCodeEnti
             String shortDescription,
             String longDescription
     );
+
+    void deleteByImportJobId(String importJobId);
 }

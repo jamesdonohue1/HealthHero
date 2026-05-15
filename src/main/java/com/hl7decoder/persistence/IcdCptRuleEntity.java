@@ -32,4 +32,43 @@ public class IcdCptRuleEntity {
     private String source;
     private LocalDate effectiveDate;
     private LocalDate expirationDate;
+    private String importJobId;
+    private String provenance;
+    private double confidence = 0.75;
+    private Long policySourceId;
+
+    protected IcdCptRuleEntity() {
+    }
+
+    public IcdCptRuleEntity(String icd10Code, String cptCode, String payer, String ruleType, String status,
+                            String notes, String source, LocalDate effectiveDate, LocalDate expirationDate,
+                            String importJobId, String provenance, double confidence, Long policySourceId) {
+        this.icd10Code = icd10Code;
+        this.cptCode = cptCode;
+        this.payer = payer;
+        this.ruleType = ruleType;
+        this.status = status;
+        this.notes = notes;
+        this.source = source;
+        this.effectiveDate = effectiveDate;
+        this.expirationDate = expirationDate;
+        this.importJobId = importJobId;
+        this.provenance = provenance;
+        this.confidence = confidence;
+        this.policySourceId = policySourceId;
+    }
+
+    public String getIcd10Code() { return icd10Code; }
+    public String getCptCode() { return cptCode; }
+    public String getPayer() { return payer; }
+    public String getRuleType() { return ruleType; }
+    public String getStatus() { return status; }
+    public String getNotes() { return notes; }
+    public String getSource() { return source; }
+    public LocalDate getEffectiveDate() { return effectiveDate; }
+    public LocalDate getExpirationDate() { return expirationDate; }
+    public String getImportJobId() { return importJobId; }
+    public String getProvenance() { return provenance; }
+    public double getConfidence() { return confidence; }
+    public Long getPolicySourceId() { return policySourceId; }
 }

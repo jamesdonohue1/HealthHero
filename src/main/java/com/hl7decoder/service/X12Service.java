@@ -21,6 +21,9 @@ public class X12Service {
             Map.entry("SV1", "Professional Service Line"),
             Map.entry("SVC", "Service Payment Information"),
             Map.entry("CAS", "Claim Adjustment"),
+            Map.entry("EB", "Eligibility or Benefit Information"),
+            Map.entry("EQ", "Eligibility or Benefit Inquiry"),
+            Map.entry("TRN", "Trace"),
             Map.entry("DMG", "Demographic Information"),
             Map.entry("DTP", "Date or Time or Period"),
             Map.entry("SE", "Transaction Set Trailer"),
@@ -72,8 +75,39 @@ public class X12Service {
         if ("Unknown".equals(transactionType)) {
             issues.add("Transaction type could not be determined from ST-01.");
         }
+        validateRequiredLoops(transactionType, ids, issues);
 
         return new X12DecodeResponse(transactionType, segments, issues);
+    }
+
+    public Map<String, Object> revenueCycle(String x12) {
+        X12DecodeResponse decoded = decode(x12);
+        List<String> ids = decoded.segments().stream().map(X12DecodeResponse.X12Segment::segmentId).toList();
+        List<String> denials = denialReasons(decoded);
+        return Map.of(
+                "transactionType", decoded.transactionType(),
+                "profile", claimProfile(decoded),
+                "requiredLoopIssues", decoded.issues(),
+                "eligibility", eligibilitySummary(decoded),
+                "payment", paymentSummary(decoded),
+                "denialReasons", denials,
+                "claimReadinessScore", claimReadiness(decoded, denials),
+                "claimReadinessFactors", List.of(
+                        ids.contains("HI") ? "Diagnosis present" : "Missing diagnosis loop",
+                        ids.contains("SV1") || ids.contains("SVC") ? "Service line present" : "Missing service line",
+                        denials.isEmpty() ? "No denial adjustment reason detected" : "Denial/payment adjustment needs review"
+                )
+        );
+    }
+
+    public Map<String, Object> generate270(String memberId) {
+        String member = memberId == null || memberId.isBlank() ? "SYN000001" : memberId.trim();
+        String inquiry = "ISA*00*          *00*          *ZZ*HEALTHHERO    *ZZ*PAYER          *260101*1230*^*00501*000000001*0*T*:~"
+                + "GS*HS*HEALTHHERO*PAYER*20260101*1230*1*X*005010X279A1~ST*270*0001*005010X279A1~"
+                + "BHT*0022*13*ELIG" + member + "*20260101*1230~HL*1**20*1~NM1*PR*2*PAYER*****PI*PAYER~"
+                + "HL*2*1*21*1~NM1*1P*2*HEALTHCARE HERO*****XX*1234567893~HL*3*2*22*0~TRN*1*ELIG" + member + "~"
+                + "NM1*IL*1*DOE*JANE****MI*" + member + "~EQ*30~SE*10*0001~GE*1*1~IEA*1*000000001~";
+        return Map.of("memberId", member, "transactionType", "270 Eligibility Inquiry", "x12", inquiry);
     }
 
     private String transactionName(String code) {
@@ -86,6 +120,79 @@ public class X12Service {
             case "277" -> "277 Claim Status Response";
             default -> "Unknown";
         };
+    }
+
+    private void validateRequiredLoops(String transactionType, List<String> ids, List<String> issues) {
+        if (transactionType.startsWith("837")) {
+            require(ids, issues, "BHT", "837 claim is missing BHT beginning segment.");
+            require(ids, issues, "NM1", "837 claim is missing NM1 provider/subscriber loops.");
+            require(ids, issues, "CLM", "837 claim is missing CLM claim information.");
+            require(ids, issues, "HI", "837 claim is missing HI diagnosis information.");
+            require(ids, issues, "SV1", "837 professional claim is missing SV1 service line.");
+        } else if (transactionType.startsWith("835")) {
+            require(ids, issues, "SVC", "835 payment is missing SVC service payment loop.");
+            require(ids, issues, "CAS", "835 payment is missing CAS adjustment details.");
+        } else if (transactionType.startsWith("270") || transactionType.startsWith("271")) {
+            require(ids, issues, "NM1", transactionType + " is missing NM1 subscriber/dependent identity.");
+            if (transactionType.startsWith("271")) {
+                require(ids, issues, "EB", "271 eligibility response is missing EB benefit information.");
+            }
+        }
+    }
+
+    private void require(List<String> ids, List<String> issues, String segment, String message) {
+        if (!ids.contains(segment)) {
+            issues.add(message);
+        }
+    }
+
+    private String claimProfile(X12DecodeResponse decoded) {
+        String text = decoded.segments().stream().map(segment -> String.join("*", segment.elements())).reduce("", (a, b) -> a + " " + b).toLowerCase();
+        if (text.contains("005010x223")) {
+            return "837 Institutional";
+        }
+        if (text.contains("005010x224")) {
+            return "837 Dental";
+        }
+        if (decoded.transactionType().startsWith("837")) {
+            return "837 Professional";
+        }
+        return decoded.transactionType();
+    }
+
+    private Map<String, Object> eligibilitySummary(X12DecodeResponse decoded) {
+        List<String> benefits = decoded.segments().stream()
+                .filter(segment -> "EB".equals(segment.segmentId()))
+                .map(segment -> String.join(" | ", segment.elements()))
+                .toList();
+        return Map.of(
+                "coverageStatus", benefits.stream().anyMatch(value -> value.startsWith("1")) ? "ACTIVE" : "UNKNOWN",
+                "benefits", benefits,
+                "copayCoinsuranceDeductible", decoded.segments().stream()
+                        .filter(segment -> "EB".equals(segment.segmentId()))
+                        .map(segment -> Map.of("raw", String.join("*", segment.elements())))
+                        .toList()
+        );
+    }
+
+    private Map<String, Object> paymentSummary(X12DecodeResponse decoded) {
+        List<String> payments = decoded.segments().stream()
+                .filter(segment -> "SVC".equals(segment.segmentId()))
+                .map(segment -> String.join(" | ", segment.elements()))
+                .toList();
+        return Map.of("servicePayments", payments, "paymentLineCount", payments.size());
+    }
+
+    private List<String> denialReasons(X12DecodeResponse decoded) {
+        return decoded.segments().stream()
+                .filter(segment -> "CAS".equals(segment.segmentId()))
+                .map(segment -> "Adjustment: " + String.join(" | ", segment.elements()))
+                .toList();
+    }
+
+    private int claimReadiness(X12DecodeResponse decoded, List<String> denialReasons) {
+        int score = 100 - decoded.issues().size() * 8 - denialReasons.size() * 10;
+        return Math.max(0, Math.min(100, score));
     }
 
     private String loop(String segmentId, String[] elements, String currentLoop) {

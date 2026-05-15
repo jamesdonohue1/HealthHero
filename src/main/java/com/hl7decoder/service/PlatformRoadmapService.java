@@ -43,6 +43,43 @@ public class PlatformRoadmapService {
         );
     }
 
+    public Map<String, Object> hl7DeepAnalysis(String message) {
+        Hl7ParseResult parsed = hl7Service.parseAndValidate(new Hl7Request(message, ValidationMode.STANDARD));
+        List<Map<String, String>> diagnosisLookups = parsed.segments().stream()
+                .filter(segment -> "DG1".equals(segment.name()))
+                .map(segment -> Map.of(
+                        "segment", "DG1-" + segment.index(),
+                        "code", value(segment, 3),
+                        "description", value(segment, 4),
+                        "oneClickLookup", "/api/icd10/search"))
+                .toList();
+        List<Map<String, String>> labObservations = parsed.segments().stream()
+                .filter(segment -> "OBX".equals(segment.name()))
+                .map(segment -> Map.of(
+                        "segment", "OBX-" + segment.index(),
+                        "test", value(segment, 3),
+                        "value", value(segment, 5),
+                        "units", value(segment, 6),
+                        "flag", value(segment, 8)))
+                .toList();
+        List<Map<String, Object>> inlineHighlights = parsed.issues().stream()
+                .map(issue -> Map.<String, Object>of(
+                        "location", issue.location(),
+                        "severity", issue.severity().name(),
+                        "description", issue.description()))
+                .toList();
+        return Map.of(
+                "messageType", parsed.metadata().messageType(),
+                "profile", parsed.metadata().messageType() == null ? "CUSTOM" : parsed.metadata().messageType(),
+                "diagnosisLookups", diagnosisLookups,
+                "labObservations", labObservations,
+                "inlineHighlights", inlineHighlights,
+                "ackNack", ackNackWorkflow(parsed),
+                "sequencing", sequencing(parsed),
+                "sideBySideRepairReady", true
+        );
+    }
+
     public Map<String, Object> mappingTemplate(String sourceType) {
         String source = sourceType == null || sourceType.isBlank() ? "HL7" : sourceType.toUpperCase(Locale.ROOT);
         List<Map<String, String>> mappings = List.of(
@@ -81,6 +118,7 @@ public class PlatformRoadmapService {
         return Map.of(
                 "riskLevel", containsAny(text, "urgent", "stat") ? "HIGH" : "MEDIUM",
                 "missingInfo", checklist,
+                "packet", List.of("Cover sheet", "Clinical summary", "Diagnosis/procedure codes", "Conservative treatment proof", "Relevant imaging/labs"),
                 "summary", "Prior authorization packet checklist generated from submitted context.",
                 "payerNotes", List.of("Verify payer portal requirements.", "Attach relevant clinical notes before submission.")
         );
@@ -103,7 +141,8 @@ public class PlatformRoadmapService {
         return Map.of(
                 "denialScore", Math.min(95, 35 + reasons.size() * 20),
                 "rootCauses", reasons,
-                "appealActions", List.of("Gather remittance details.", "Attach clinical documentation.", "Validate CPT/ICD and modifier set.")
+                "appealActions", List.of("Gather remittance details.", "Attach clinical documentation.", "Validate CPT/ICD and modifier set."),
+                "appealPacket", List.of("Appeal letter", "EOB/835 adjustment details", "Medical necessity evidence", "Corrected claim when needed")
         );
     }
 
@@ -197,7 +236,41 @@ public class PlatformRoadmapService {
         return Map.of(
                 "generated270", x270,
                 "coverageSummary", List.of("Active coverage status requires payer 271 response.", "Member ID included in generated inquiry."),
-                "copayDeductibleFields", List.of("EB-07 copay", "EB-08 coinsurance", "EB-09 deductible")
+                "copayDeductibleFields", List.of("EB-07 copay", "EB-08 coinsurance", "EB-09 deductible"),
+                "decoded271Fields", containsAny(text, "EB*") ? List.of("Benefit loop detected", "Review EB-01 status, EB-07 copay, EB-08 coinsurance, EB-09 deductible") : List.of()
+        );
+    }
+
+    public Map<String, Object> payerRequirements(String text) {
+        String payer = text == null || text.isBlank() ? "Default payer" : text.trim();
+        return Map.of(
+                "payer", payer,
+                "requirements", List.of("Verify active coverage", "Check prior authorization by CPT/HCPCS", "Confirm LCD/NCD medical necessity when Medicare applies", "Attach diagnosis-specific documentation"),
+                "policySources", List.of("Imported payer rules", "LCD/NCD policy source tracker", "Local medical necessity rules"),
+                "lastReviewed", LocalDateTime.now().toLocalDate().toString()
+        );
+    }
+
+    private Map<String, Object> ackNackWorkflow(Hl7ParseResult parsed) {
+        List<String> msa = parsed.segments().stream().filter(segment -> "MSA".equals(segment.name())).map(segment -> value(segment, 1)).toList();
+        return Map.of(
+                "isAck", "ACK".equals(parsed.metadata().messageType()),
+                "ackCodes", msa,
+                "status", msa.stream().anyMatch(code -> "AE".equals(code) || "AR".equals(code)) ? "NACK" : msa.isEmpty() ? "NO_ACK" : "ACK"
+        );
+    }
+
+    private Map<String, Object> sequencing(Hl7ParseResult parsed) {
+        String sequence = parsed.segments().stream()
+                .filter(segment -> "MSH".equals(segment.name()))
+                .findFirst()
+                .map(segment -> value(segment, 13))
+                .orElse("");
+        return Map.of(
+                "sequenceNumber", sequence,
+                "continuationPointer", parsed.segments().stream().filter(segment -> "MSH".equals(segment.name())).findFirst().map(segment -> value(segment, 14)).orElse(""),
+                "messageControlId", parsed.metadata().controlId() == null ? "" : parsed.metadata().controlId(),
+                "checks", sequence.isBlank() ? List.of("No MSH-13 sequence number supplied.") : List.of("MSH-13 sequence number present.")
         );
     }
 

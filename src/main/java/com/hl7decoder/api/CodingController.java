@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/coding")
+@RequestMapping({"/api/coding", "/api/v1/coding"})
 public class CodingController {
     private final IcdCptCompatibilityService compatibilityService;
 

@@ -4,8 +4,11 @@ import com.hl7decoder.api.dto.cpt.ProcedureSearchRequest;
 import com.hl7decoder.model.cpt.ProcedureCode;
 import com.hl7decoder.model.cpt.ProcedureSearchResponse;
 import com.hl7decoder.model.cpt.ProcedureSearchResult;
+import com.hl7decoder.persistence.CodeSynonymEntity;
+import com.hl7decoder.persistence.CodeSynonymRepository;
 import com.hl7decoder.persistence.ProcedureCodeEntity;
 import com.hl7decoder.persistence.ProcedureCodeRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -40,14 +43,22 @@ public class CptSearchService {
     );
 
     private final ProcedureCodeRepository repository;
+    private final CodeSynonymRepository synonymRepository;
     private final Map<String, CachedSearch> cache = new ConcurrentHashMap<>();
 
-    public CptSearchService(ProcedureCodeRepository repository) {
+    @Autowired
+    public CptSearchService(ProcedureCodeRepository repository, CodeSynonymRepository synonymRepository) {
         this.repository = repository;
+        this.synonymRepository = synonymRepository;
+    }
+
+    public CptSearchService(ProcedureCodeRepository repository) {
+        this(repository, null);
     }
 
     CptSearchService() {
         this.repository = null;
+        this.synonymRepository = null;
     }
 
     public ProcedureSearchResponse search(ProcedureSearchRequest request) {
@@ -106,6 +117,16 @@ public class CptSearchService {
                 ProcedureCode code = fromEntity(entity);
                 codes.putIfAbsent(code.code(), code);
             }
+            if (synonymRepository != null) {
+                for (String synonymType : List.of("PROCEDURE", "CPT", "HCPCS")) {
+                    for (CodeSynonymEntity synonym : synonymRepository.findByCodeTypeIgnoreCaseAndTermContainingIgnoreCase(synonymType, query)) {
+                        for (ProcedureCodeEntity entity : repository.findTop25ByCodeContainingIgnoreCaseOrShortDescriptionContainingIgnoreCaseOrLongDescriptionContainingIgnoreCase(synonym.getSynonyms(), synonym.getSynonyms(), synonym.getSynonyms())) {
+                            ProcedureCode code = fromEntity(entity);
+                            codes.putIfAbsent(code.code(), code);
+                        }
+                    }
+                }
+            }
         }
         for (ProcedureCode code : BUILT_IN_CODES) {
             codes.putIfAbsent(code.code(), code);
@@ -114,7 +135,17 @@ public class CptSearchService {
     }
 
     private ProcedureCode fromEntity(ProcedureCodeEntity entity) {
-        return new ProcedureCode(entity.getCode(), entity.getCodeType(), entity.getShortDescription(), entity.getLongDescription(), entity.getCategory(), entity.getEffectiveDate(), entity.getTerminationDate(), entity.isActive(), entity.getSource(), List.of());
+        String source = entity.getSource();
+        if (entity.getCodeSetVersion() != null && !entity.getCodeSetVersion().isBlank()) {
+            source = (source == null ? "" : source) + " | version " + entity.getCodeSetVersion();
+        }
+        if (!entity.isActive() && entity.getReplacementCode() != null && !entity.getReplacementCode().isBlank()) {
+            source = (source == null ? "" : source) + " | replacement " + entity.getReplacementCode();
+        }
+        if (entity.getProvenance() != null && !entity.getProvenance().isBlank()) {
+            source = (source == null ? "" : source) + " | " + entity.getProvenance();
+        }
+        return new ProcedureCode(entity.getCode(), entity.getCodeType(), entity.getShortDescription(), entity.getLongDescription(), entity.getCategory(), entity.getEffectiveDate(), entity.getTerminationDate(), entity.isActive(), source, List.of());
     }
 
     private ProcedureSearchResult toResult(ProcedureCode code, int confidence, String reason) {

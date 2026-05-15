@@ -1,0 +1,30 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+server:
+  forward-headers-strategy: framework
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+app:
+  ai:
+    local-only: ${AI_LOCAL_ONLY:true}
+    mask-phi: ${AI_MASK_PHI:true}
+  api:
+    rate-limit-per-minute: ${API_RATE_LIMIT_PER_MINUTE:600}
+  features:
+    dashboard: ${FEATURE_DASHBOARD_ENABLED:true}
+    workspaces: ${FEATURE_WORKSPACES_ENABLED:true}
+    ai-assist: ${FEATURE_AI_ASSIST_ENABLED:false}
+    admin-imports: ${FEATURE_ADMIN_IMPORTS_ENABLED:false}
+    platform-tools: ${FEATURE_PLATFORM_TOOLS_ENABLED:true}
+    dark-mode: ${FEATURE_DARK_MODE_ENABLED:true}

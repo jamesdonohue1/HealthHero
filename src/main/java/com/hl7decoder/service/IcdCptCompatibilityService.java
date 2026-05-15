@@ -3,6 +3,9 @@ package com.hl7decoder.service;
 import com.hl7decoder.api.dto.cpt.IcdCptCompatibilityRequest;
 import com.hl7decoder.model.cpt.IcdCptMatchResult;
 import com.hl7decoder.model.cpt.ModifierSuggestion;
+import com.hl7decoder.persistence.IcdCptRuleEntity;
+import com.hl7decoder.persistence.IcdCptRuleRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -24,9 +27,21 @@ public class IcdCptCompatibilityService {
     );
 
     private final CptSearchService cptSearchService;
+    private final IcdCptRuleRepository ruleRepository;
+
+    @Autowired
+    public IcdCptCompatibilityService(CptSearchService cptSearchService, IcdCptRuleRepository ruleRepository) {
+        this.cptSearchService = cptSearchService;
+        this.ruleRepository = ruleRepository;
+    }
 
     public IcdCptCompatibilityService(CptSearchService cptSearchService) {
-        this.cptSearchService = cptSearchService;
+        this(cptSearchService, null);
+    }
+
+    IcdCptCompatibilityService() {
+        this.cptSearchService = new CptSearchService();
+        this.ruleRepository = null;
     }
 
     public IcdCptMatchResult check(IcdCptCompatibilityRequest request) {
@@ -50,8 +65,12 @@ public class IcdCptCompatibilityService {
             recommendations.add("Diagnosis text inferred as " + icd + ". Verify against ICD-10-CM coding guidelines.");
         }
 
-        List<String> allowed = RULES.getOrDefault(cpt, List.of());
-        boolean supported = allowed.stream().anyMatch(icd::startsWith);
+        List<IcdCptRuleEntity> importedRules = ruleRepository == null || cpt.isBlank() ? List.of() : ruleRepository.findByCptCodeIgnoreCase(cpt);
+        List<String> allowed = importedRules.isEmpty()
+                ? RULES.getOrDefault(cpt, List.of())
+                : importedRules.stream().map(IcdCptRuleEntity::getIcd10Code).toList();
+        String resolvedIcd = icd;
+        boolean supported = allowed.stream().anyMatch(resolvedIcd::startsWith);
         String status;
         double confidence;
         String reason;
@@ -63,8 +82,18 @@ public class IcdCptCompatibilityService {
             warnings.add("Add both ICD-10 and CPT/HCPCS codes before claim readiness review.");
         } else if (supported) {
             status = "SUPPORTED";
-            confidence = 0.86;
-            reason = "Diagnosis and procedure appear clinically related.";
+            confidence = importedRules.stream()
+                    .filter(rule -> resolvedIcd.startsWith(rule.getIcd10Code()))
+                    .mapToDouble(IcdCptRuleEntity::getConfidence)
+                    .findFirst()
+                    .orElse(0.86);
+            reason = importedRules.isEmpty()
+                    ? "Diagnosis and procedure appear clinically related."
+                    : importedRules.stream()
+                            .filter(rule -> resolvedIcd.startsWith(rule.getIcd10Code()))
+                            .findFirst()
+                            .map(rule -> "Matched imported payer rule from " + nullSafe(rule.getSource()) + " (" + nullSafe(rule.getProvenance()) + ").")
+                            .orElse("Matched imported payer rule.");
         } else if (allowed.isEmpty()) {
             status = "UNKNOWN_RULE_NOT_FOUND";
             confidence = 0.45;
@@ -87,6 +116,12 @@ public class IcdCptCompatibilityService {
         }
         if (request.payer() != null && !request.payer().isBlank()) {
             recommendations.add("Confirm payer-specific LCD/NCD and modifier rules for " + request.payer().trim() + ".");
+        }
+        if (!importedRules.isEmpty()) {
+            importedRules.stream()
+                    .filter(rule -> rule.getNotes() != null && !rule.getNotes().isBlank())
+                    .limit(3)
+                    .forEach(rule -> recommendations.add("Rule note: " + rule.getNotes()));
         }
         recommendations.add("Confirm documentation supports diagnosis specificity, procedure indication, and medical necessity.");
 
@@ -119,5 +154,9 @@ public class IcdCptCompatibilityService {
 
     private String text(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT).trim();
+    }
+
+    private String nullSafe(String value) {
+        return value == null || value.isBlank() ? "unknown source" : value;
     }
 }

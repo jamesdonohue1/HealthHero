@@ -97,6 +97,68 @@ public class FhirConversionService {
         );
     }
 
+    public Map<String, Object> validate(String fhirJson, String profileName) {
+        Map<String, Object> root = readJson(fhirJson);
+        List<Map<String, Object>> resources = resources(root);
+        List<String> issues = new ArrayList<>();
+        List<String> profiles = new ArrayList<>();
+        String profile = profileName == null || profileName.isBlank() ? "FHIR_R4_CORE" : profileName.trim().toUpperCase();
+        profiles.add(profile);
+        if (!"Bundle".equals(root.get("resourceType")) && !root.containsKey("resourceType")) {
+            issues.add("FHIR resource is missing resourceType.");
+        }
+        for (Map<String, Object> resource : resources) {
+            String type = string(resource.get("resourceType"), "");
+            if (type.isBlank()) {
+                issues.add("Entry contains a resource without resourceType.");
+            }
+            if (resource.get("id") == null) {
+                issues.add(type + " resource is missing id.");
+            }
+            if ("Patient".equals(type) && resource.get("name") == null && resource.get("identifier") == null) {
+                issues.add("Patient should include name or identifier.");
+            }
+            if ("Observation".equals(type) && resource.get("code") == null) {
+                issues.add("Observation is missing code.");
+            }
+            if ("Observation".equals(type) && resource.get("valueString") == null && resource.get("valueQuantity") == null) {
+                issues.add("Observation is missing valueString/valueQuantity.");
+            }
+        }
+        return Map.of(
+                "profile", profile,
+                "valid", issues.isEmpty(),
+                "resourceCount", resources.size(),
+                "issues", issues,
+                "profilesApplied", profiles,
+                "library", "Jackson structural FHIR R4 validator"
+        );
+    }
+
+    public Map<String, Object> batchHl7ToFhir(String batchText) {
+        String[] messages = (batchText == null ? "" : batchText).split("(?=MSH\\|)");
+        List<Map<String, Object>> bundles = new ArrayList<>();
+        List<String> issues = new ArrayList<>();
+        for (int i = 0; i < messages.length; i++) {
+            String message = messages[i].trim();
+            if (message.isBlank()) {
+                continue;
+            }
+            try {
+                FhirConversionResponse converted = hl7ToFhir(message);
+                bundles.add(Map.of("index", i + 1, "bundle", converted.bundle(), "notes", converted.mappingNotes()));
+            } catch (RuntimeException ex) {
+                issues.add("Message " + (i + 1) + ": " + ex.getMessage());
+            }
+        }
+        return Map.of(
+                "convertedCount", bundles.size(),
+                "bundles", bundles,
+                "issues", issues,
+                "targetType", "FHIR R4-like Bundle batch"
+        );
+    }
+
     private Map<String, Object> patientResource(String id, String identifier, String name, String birthDate, String sex) {
         Map<String, Object> patient = resource("Patient", id, new LinkedHashMap<>());
         patient.put("identifier", List.of(Map.of("value", safe(identifier, id))));

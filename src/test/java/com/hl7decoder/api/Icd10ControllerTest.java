@@ -24,7 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class Icd10ControllerTest {
     private final MockMvc mockMvc = MockMvcBuilders
             .standaloneSetup(new Icd10Controller(new StubIcd10Service()))
-            .setControllerAdvice(new ApiExceptionHandler())
+            .setControllerAdvice(new ApiExceptionHandler(new com.hl7decoder.config.ErrorTrackingService()))
             .setMessageConverters(new MappingJackson2HttpMessageConverter(new ObjectMapper().findAndRegisterModules()))
             .build();
 
