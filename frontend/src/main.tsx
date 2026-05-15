@@ -2154,7 +2154,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
     { id: 'roadmap', label: 'Roadmap Engines' },
     ...(features.aiAssist ? [{ id: 'ai' as PlatformToolPage, label: 'AI Review' }] : [])
   ];
-  const [activeToolPage, setActiveToolPage] = React.useState<PlatformToolPage>('repair');
+  const [visibleToolPages, setVisibleToolPages] = React.useState<PlatformToolPage[]>(['repair']);
   const [repairInput, setRepairInput] = React.useState(sampleMessage);
   const [repairResult, setRepairResult] = React.useState<Hl7RepairResponse | null>(null);
   const [profileResult, setProfileResult] = React.useState<GenericPlatformResponse | null>(null);
@@ -2308,10 +2308,21 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
   }
 
   React.useEffect(() => {
-    if (!toolPages.some((page) => page.id === activeToolPage)) {
-      setActiveToolPage('repair');
+    const availableToolPages = new Set(toolPages.map((page) => page.id));
+    const nextVisibleToolPages = visibleToolPages.filter((page) => availableToolPages.has(page));
+
+    if (nextVisibleToolPages.length === 0) {
+      setVisibleToolPages(['repair']);
+    } else if (nextVisibleToolPages.length !== visibleToolPages.length) {
+      setVisibleToolPages(nextVisibleToolPages);
     }
-  }, [activeToolPage, toolPages]);
+  }, [toolPages, visibleToolPages]);
+
+  function toggleToolPage(pageId: PlatformToolPage) {
+    setVisibleToolPages((current) => current.includes(pageId)
+      ? current.length === 1 ? current : current.filter((page) => page !== pageId)
+      : [...current, pageId]);
+  }
 
   return (
     <Box className="tools-workspace">
@@ -2328,16 +2339,16 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           <Chip
             key={page.id}
             label={page.label}
-            color={activeToolPage === page.id ? 'primary' : 'default'}
-            variant={activeToolPage === page.id ? 'filled' : 'outlined'}
+            color={visibleToolPages.includes(page.id) ? 'primary' : 'default'}
+            variant={visibleToolPages.includes(page.id) ? 'filled' : 'outlined'}
             clickable
-            onClick={() => setActiveToolPage(page.id)}
+            onClick={() => toggleToolPage(page.id)}
           />
         ))}
       </Box>
 
-      <Box className="tool-page">
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'repair' ? 'tool-page-hidden' : ''}`}>
+      <Box className="tool-page tool-workspace-grid">
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('repair') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>HL7 Repair</Typography>
             <Box className="tool-button-row">
@@ -2373,7 +2384,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'hl7-fhir' ? 'tool-page-hidden' : ''}`}>
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('hl7-fhir') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>HL7 to FHIR</Typography>
             <Box className="tool-button-row">
@@ -2409,7 +2420,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'fhir-hl7' ? 'tool-page-hidden' : ''}`}>
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('fhir-hl7') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>FHIR to HL7</Typography>
             <Box className="tool-button-row">
@@ -2431,7 +2442,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'synthetic' ? 'tool-page-hidden' : ''}`}>
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('synthetic') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>Synthetic Data</Typography>
             <Box className="tool-button-row">
@@ -2469,7 +2480,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'x12' ? 'tool-page-hidden' : ''}`}>
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('x12') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>X12 Decoder</Typography>
             <Box className="tool-button-row">
@@ -2516,7 +2527,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'necessity' ? 'tool-page-hidden' : ''}`}>
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('necessity') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>Medical Necessity</Typography>
             <Box className="tool-button-row">
@@ -2548,7 +2559,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'roadmap' ? 'tool-page-hidden' : ''}`}>
+        <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('roadmap') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>Roadmap Engines</Typography>
             <Box className="tool-button-row">
@@ -2585,7 +2596,7 @@ function PlatformToolsModule({ features, currentUser, requireAuth }: { features:
           )}
         </Box>
 
-        {features.aiAssist && <Box className={`tool-panel tool-page-panel ${activeToolPage !== 'ai' ? 'tool-page-hidden' : ''}`}>
+        {features.aiAssist && <Box className={`tool-panel tool-page-panel ${!visibleToolPages.includes('ai') ? 'tool-page-hidden' : ''}`}>
           <Box className="pane-head">
             <Typography variant="subtitle1" fontWeight={700}>AI Review</Typography>
             <Box className="tool-button-row">

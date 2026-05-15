@@ -31,11 +31,13 @@ test('platform tools expose clear controls and AI human review status', () => {
   assert.match(source, /approvalStatus/);
 });
 
-test('platform tools are split into dedicated pages', () => {
+test('platform tools support a multi-panel workspace', () => {
   assert.match(source, /type PlatformToolPage/);
-  assert.match(source, /activeToolPage !== 'repair'/);
-  assert.match(source, /activeToolPage !== 'x12'/);
-  assert.match(source, /activeToolPage !== 'ai'/);
+  assert.match(source, /visibleToolPages/);
+  assert.match(source, /toggleToolPage/);
+  assert.match(source, /!visibleToolPages\.includes\('repair'\)/);
+  assert.match(source, /!visibleToolPages\.includes\('x12'\)/);
+  assert.match(source, /!visibleToolPages\.includes\('ai'\)/);
 });
 
 test('AI review requires authentication before calling the API', () => {

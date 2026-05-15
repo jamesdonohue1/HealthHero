@@ -296,6 +296,13 @@ body {
   flex: 1;
 }
 
+.tool-workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  align-content: start;
+  gap: 14px;
+}
+
 .tool-page-panel {
   flex: 1;
   min-height: min(720px, calc(100vh - 230px));
