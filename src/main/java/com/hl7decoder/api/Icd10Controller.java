@@ -7,7 +7,9 @@ import com.hl7decoder.model.icd10.Icd10AutocompleteResponse;
 import com.hl7decoder.model.icd10.Icd10RefineResponse;
 import com.hl7decoder.model.icd10.Icd10SavedSearchResponse;
 import com.hl7decoder.model.icd10.Icd10SearchResponse;
+import com.hl7decoder.model.compliance.AuditAction;
 import com.hl7decoder.security.AuthenticatedPrincipal;
+import com.hl7decoder.service.AuditService;
 import com.hl7decoder.service.Icd10Service;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -15,6 +17,7 @@ import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,12 +37,19 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequestMapping("/api/icd10")
 public class Icd10Controller {
     private final Icd10Service icd10Service;
+    private final AuditService auditService;
     private final Map<String, Window> searchLimits = new ConcurrentHashMap<>();
     private final Map<String, Window> autocompleteLimits = new ConcurrentHashMap<>();
     private final Map<String, Window> exportLimits = new ConcurrentHashMap<>();
 
     public Icd10Controller(Icd10Service icd10Service) {
+        this(icd10Service, null);
+    }
+
+    @Autowired
+    public Icd10Controller(Icd10Service icd10Service, AuditService auditService) {
         this.icd10Service = icd10Service;
+        this.auditService = auditService;
     }
 
     @PostMapping("/search")
@@ -61,7 +71,7 @@ public class Icd10Controller {
 
     @PostMapping("/save")
     public Icd10SavedSearchResponse save(@Valid @RequestBody Icd10SearchRequest request, @AuthenticationPrincipal AuthenticatedPrincipal principal) {
-        return icd10Service.save(request, principal.organizationId());
+        return icd10Service.save(request, principal.organizationId(), principal.userId());
     }
 
     @GetMapping("/history")
@@ -76,31 +86,39 @@ public class Icd10Controller {
 
     @DeleteMapping("/saved/{id}")
     public ResponseEntity<Void> deleteSaved(@PathVariable String id, @AuthenticationPrincipal AuthenticatedPrincipal principal) {
-        icd10Service.deleteSaved(id, principal.organizationId());
+        icd10Service.deleteSaved(id, principal.organizationId(), principal.userId());
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/export/json")
-    public ResponseEntity<byte[]> exportJson(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest) {
+    public ResponseEntity<byte[]> exportJson(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest,
+                                             @AuthenticationPrincipal AuthenticatedPrincipal principal) {
         rateLimit(exportLimits, clientKey(servletRequest), 20, "Anonymous export limit exceeded. Please wait before exporting again.");
+        auditExport(principal, "json", request);
         return download(icd10Service.exportJson(request), MediaType.APPLICATION_JSON, "icd10-search.json");
     }
 
     @PostMapping("/export/csv")
-    public ResponseEntity<byte[]> exportCsv(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest) {
+    public ResponseEntity<byte[]> exportCsv(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest,
+                                            @AuthenticationPrincipal AuthenticatedPrincipal principal) {
         rateLimit(exportLimits, clientKey(servletRequest), 20, "Anonymous export limit exceeded. Please wait before exporting again.");
+        auditExport(principal, "csv", request);
         return download(icd10Service.exportCsv(request), MediaType.parseMediaType("text/csv"), "icd10-search.csv");
     }
 
     @PostMapping("/export/pdf")
-    public ResponseEntity<byte[]> exportPdf(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest) {
+    public ResponseEntity<byte[]> exportPdf(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest,
+                                            @AuthenticationPrincipal AuthenticatedPrincipal principal) {
         rateLimit(exportLimits, clientKey(servletRequest), 10, "Anonymous PDF export limit exceeded. Please wait before exporting again.");
+        auditExport(principal, "pdf", request);
         return download(icd10Service.exportPdf(request), MediaType.APPLICATION_PDF, "icd10-search.pdf");
     }
 
     @PostMapping("/export/text")
-    public ResponseEntity<byte[]> exportText(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest) {
+    public ResponseEntity<byte[]> exportText(@Valid @RequestBody Icd10ExportRequest request, HttpServletRequest servletRequest,
+                                             @AuthenticationPrincipal AuthenticatedPrincipal principal) {
         rateLimit(exportLimits, clientKey(servletRequest), 20, "Anonymous export limit exceeded. Please wait before exporting again.");
+        auditExport(principal, "text", request);
         return download(icd10Service.exportText(request), MediaType.TEXT_PLAIN, "icd10-search.txt");
     }
 
@@ -130,6 +148,13 @@ public class Icd10Controller {
             return forwardedFor.split(",")[0].trim();
         }
         return request.getRemoteAddr();
+    }
+
+    private void auditExport(AuthenticatedPrincipal principal, String format, Icd10ExportRequest request) {
+        if (principal != null && auditService != null) {
+            auditService.record(AuditAction.EXPORT, principal.organizationId(), principal.userId(), "ICD10_EXPORT",
+                    format, true, "ICD-10 export; format=" + format + "; redacted=" + Boolean.TRUE.equals(request.redactPhi()));
+        }
     }
 
     private record Window(Instant resetAt, int count) {

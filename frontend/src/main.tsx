@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { Alert, Box, Button, Chip, CssBaseline, Divider, Drawer, FormControl, InputLabel, MenuItem, Select, Switch, Tab, Tabs, ThemeProvider, Tooltip, Typography, createTheme } from '@mui/material';
+import { Alert, Box, Button, Chip, CssBaseline, Divider, FormControl, FormControlLabel, InputLabel, MenuItem, Select, Switch, Tab, Tabs, ThemeProvider, Tooltip, Typography, createTheme } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CheckIcon from '@mui/icons-material/Check';
 import ClearAllIcon from '@mui/icons-material/ClearAll';
@@ -236,58 +236,17 @@ type IcdCptMatchResult = {
   modifierSuggestions: { modifier: string; reason: string; required: boolean }[];
 };
 
-type WorkspaceRecord = {
-  id: string;
-  recordType: string;
-  title: string;
-  folder?: string;
-  tags?: string;
-  notes?: string;
-  visibility: string;
-  ownerUserId: string;
-  createdAt: string;
-  updatedAt: string;
-  payload: Record<string, unknown>;
-};
-
-type WorkspaceActivity = {
-  workspaceId: string;
-  actorUserId: string;
-  occurredAt: string;
-  action: string;
-  detail: string;
-};
-
-type AiAssistResponse = {
-  promptType: string;
-  provider: string;
-  model: string;
-  externalCall: boolean;
-  redacted: boolean;
-  tokenEstimate: number;
-  summary: string;
-  suggestions: string[];
-  warnings: string[];
-  approvalStatus: string;
-  generatedAt: string;
-};
-
-type FeatureFlags = {
-  dashboard: boolean;
-  workspaces: boolean;
-  aiAssist: boolean;
-  adminImports: boolean;
-  platformTools: boolean;
-  darkMode: boolean;
-};
-
-const defaultFeatureFlags: FeatureFlags = {
-  dashboard: true,
-  workspaces: true,
-  aiAssist: true,
-  adminImports: true,
-  platformTools: true,
-  darkMode: true
+type PhiScanResponse = {
+  suspicious: boolean;
+  findingCount: number;
+  findings: {
+    type: string;
+    start: number;
+    end: number;
+    preview: string;
+  }[];
+  redactedText: string;
+  policy: string;
 };
 
 const sampleMessage = `MSH|^~\\&|LAB|HOSP|EHR|CLINIC|20260101123000||ORU^R01|MSG00001|P|2.5.1
@@ -362,74 +321,9 @@ function App() {
   const [status, setStatus] = React.useState('');
   const [error, setError] = React.useState('');
   const [selectedLocation, setSelectedLocation] = React.useState('');
-  const [darkMode, setDarkMode] = React.useState(window.localStorage.getItem('healthcareHeroTheme') === 'dark');
-  const [helpOpen, setHelpOpen] = React.useState(false);
-  const [notification, setNotification] = React.useState('');
-  const [features, setFeatures] = React.useState<FeatureFlags>(defaultFeatureFlags);
-  const activeTheme = React.useMemo(() => buildTheme(darkMode), [darkMode]);
-  const enabledModules = React.useMemo(() => {
-    const modules: ModuleName[] = ['hl7', 'icd10', 'cpt'];
-    if (features.dashboard) {
-      modules.unshift('dashboard');
-    }
-    if (features.workspaces) {
-      modules.push('workspaces');
-    }
-    if (features.platformTools) {
-      modules.push('tools');
-    }
-    return modules;
-  }, [features]);
-
-  React.useEffect(() => {
-    window.localStorage.setItem('healthcareHeroTheme', darkMode ? 'dark' : 'light');
-    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
-  }, [darkMode]);
-
-  React.useEffect(() => {
-    window.localStorage.setItem('healthcareHeroModule', module);
-  }, [module]);
-
-  React.useEffect(() => {
-    const savedModule = window.localStorage.getItem('healthcareHeroModule') as ModuleName | null;
-    if (savedModule && savedModule !== 'landing' && enabledModules.includes(savedModule)) {
-      setModule(savedModule);
-    }
-  }, [enabledModules]);
-
-  React.useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === '?' && !event.metaKey && !event.ctrlKey) {
-        setHelpOpen((open) => !open);
-      }
-      if ((event.metaKey || event.ctrlKey) && ['1', '2', '3', '4', '5', '6'].includes(event.key)) {
-        event.preventDefault();
-        const nextModule = enabledModules[Number(event.key) - 1];
-        if (nextModule) {
-          setModule(nextModule);
-        }
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [enabledModules]);
-
-  React.useEffect(() => {
-    getJson<FeatureFlags>('/api/features')
-      .then((response) => {
-        setFeatures(response);
-        if (!response.darkMode) {
-          setDarkMode(false);
-        }
-      })
-      .catch(() => setFeatures(defaultFeatureFlags));
-  }, []);
-
-  React.useEffect(() => {
-    if (module !== 'landing' && !enabledModules.includes(module)) {
-      setModule(enabledModules[0] ?? 'hl7');
-    }
-  }, [enabledModules, module]);
+  const [redactHl7Phi, setRedactHl7Phi] = React.useState(false);
+  const [phiPreview, setPhiPreview] = React.useState<PhiScanResponse | null>(null);
+  const [acceptedCompliance, setAcceptedCompliance] = React.useState(window.localStorage.getItem('healthcareHeroComplianceAck') === 'true');
 
   React.useEffect(() => {
     if (!selectedLocation) {
@@ -477,7 +371,7 @@ function App() {
     setStatus('Saving...');
     setError('');
     try {
-      const saved = await postJson<{ expiresAt: string }>('/api/validations', { message, mode });
+      const saved = await postJson<{ expiresAt: string }>('/api/validations', { message, mode, redactPhi: redactHl7Phi });
       setStatus(`Saved until ${new Date(saved.expiresAt).toLocaleString()}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save request failed.');
@@ -514,7 +408,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/api/exports/${format}`, {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify({ message, mode })
+        body: JSON.stringify({ message, mode, redactPhi: redactHl7Phi })
       });
       if (!response.ok) {
         throw new Error(await errorMessage(response));
@@ -529,6 +423,20 @@ function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export request failed.');
     }
+  }
+
+  async function previewHl7Phi() {
+    setError('');
+    try {
+      setPhiPreview(await postJson<PhiScanResponse>('/api/compliance/phi-preview', { text: message }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'PHI preview failed.');
+    }
+  }
+
+  function acceptCompliance() {
+    window.localStorage.setItem('healthcareHeroComplianceAck', 'true');
+    setAcceptedCompliance(true);
   }
 
   const filteredSegments = result?.segments.filter((segment) => {
@@ -616,8 +524,13 @@ function App() {
           </Box>
         </Box>
 
-        <Alert severity="warning" className="phi-alert">Do not submit real PHI unless authorized to do so.</Alert>
-        {notification && <Alert severity="info" onClose={() => setNotification('')}>{notification}</Alert>}
+        {!acceptedCompliance ? (
+          <Alert severity="warning" className="phi-alert" action={<Button color="inherit" size="small" onClick={acceptCompliance}>Acknowledge</Button>}>
+            Terms, privacy, and coding disclaimer: use only with authorization; verify all coding output before clinical, billing, or compliance use.
+          </Alert>
+        ) : (
+          <Alert severity="warning" className="phi-alert">Do not submit real PHI unless authorized to do so.</Alert>
+        )}
         {authView && (
           <AuthPanel
             view={authView}
@@ -650,6 +563,11 @@ function App() {
                 <MenuItem value="LENIENT">Lenient</MenuItem>
               </Select>
             </FormControl>
+            <FormControlLabel
+              control={<Switch size="small" checked={redactHl7Phi} onChange={(event) => setRedactHl7Phi(event.target.checked)} />}
+              label="Redact PHI"
+            />
+            <Button variant="outlined" onClick={previewHl7Phi}>PHI Preview</Button>
             <Button variant="contained" onClick={parse}>Validate</Button>
             <Tooltip title="Save this validation for 24 hours">
               <Button variant="outlined" onClick={saveValidation} startIcon={<SaveIcon />}>Save</Button>
@@ -677,6 +595,11 @@ function App() {
               options={{ minimap: { enabled: false }, wordWrap: 'on', fontSize: 13, lineNumbers: 'on' }}
               onChange={(value) => setMessage(value ?? '')}
             />
+            {phiPreview && (
+              <Alert severity={phiPreview.suspicious ? 'warning' : 'success'} className="inline-error">
+                <PhiPreviewPanel preview={phiPreview} text={message} />
+              </Alert>
+            )}
           </Box>
 
           <Box className="decoded-pane">
@@ -1181,7 +1104,51 @@ function IssueList({ issues, onSelect, selectedLocation }: { issues: ValidationI
   );
 }
 
-function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; features: FeatureFlags }) {
+function PhiPreviewPanel({ preview, text }: { preview: PhiScanResponse; text: string }) {
+  const findings = preview.findings
+    .filter((finding) => finding.start >= 0 && finding.end > finding.start && finding.end <= text.length)
+    .sort((a, b) => a.start - b.start || b.end - a.end)
+    .reduce<typeof preview.findings>((visible, finding) => {
+      const previous = visible[visible.length - 1];
+      if (previous && finding.start < previous.end) {
+        return visible;
+      }
+      return [...visible, finding];
+    }, []);
+
+  const pieces: React.ReactNode[] = [];
+  let cursor = 0;
+  findings.forEach((finding, index) => {
+    if (finding.start > cursor) {
+      pieces.push(text.slice(cursor, finding.start));
+    }
+    pieces.push(
+      <mark className="phi-highlight" key={`${finding.type}-${finding.start}-${index}`} title={finding.type}>
+        <span className="phi-highlight-label">{finding.type}</span>
+        {text.slice(finding.start, finding.end)}
+      </mark>
+    );
+    cursor = finding.end;
+  });
+  if (cursor < text.length) {
+    pieces.push(text.slice(cursor));
+  }
+
+  return (
+    <Box className="phi-preview-panel">
+      <Typography variant="caption" fontWeight={800}>
+        PHI scan: {preview.findingCount} finding{preview.findingCount === 1 ? '' : 's'}
+      </Typography>
+      {preview.suspicious ? (
+        <pre className="phi-preview-text">{pieces}</pre>
+      ) : (
+        <Typography variant="caption">No suspicious PHI patterns detected.</Typography>
+      )}
+    </Box>
+  );
+}
+
+function Icd10Module({ requireAuth }: { requireAuth: () => boolean }) {
   const [inputText, setInputText] = React.useState('patient has chronic left knee pain and shortness of breath');
   const [result, setResult] = React.useState<Icd10Response | null>(null);
   const [status, setStatus] = React.useState('');
@@ -1190,6 +1157,8 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
   const [autocompleteSuggestions, setAutocompleteSuggestions] = React.useState<Icd10AutocompleteSuggestion[]>([]);
   const [refineQuestions, setRefineQuestions] = React.useState<string[]>([]);
   const [copiedText, setCopiedText] = React.useState('');
+  const [redactIcdPhi, setRedactIcdPhi] = React.useState(false);
+  const [phiPreview, setPhiPreview] = React.useState<PhiScanResponse | null>(null);
 
   React.useEffect(() => {
     const normalized = inputText.trim();
@@ -1224,7 +1193,8 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
         inputText: nextInputText,
         resultLimit: 10,
         includeClarifyingQuestions: true,
-        includeAiRefinement: true
+        includeAiRefinement: true,
+        redactPhi: redactIcdPhi
       });
       setInputText(nextInputText);
       setResult(next);
@@ -1246,7 +1216,8 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
         inputText,
         resultLimit: 10,
         includeClarifyingQuestions: true,
-        includeAiRefinement: true
+        includeAiRefinement: true,
+        redactPhi: redactIcdPhi
       });
       setStatus(`Saved until ${new Date(saved.expiresAt).toLocaleString()}`);
     } catch (err) {
@@ -1305,7 +1276,7 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
       const response = await fetch(`${API_BASE_URL}/api/icd10/export/${format}`, {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify({ inputText, resultLimit: 10, selectedCodes, selectedOnly })
+        body: JSON.stringify({ inputText, resultLimit: 10, selectedCodes, selectedOnly, redactPhi: redactIcdPhi })
       });
       if (!response.ok) {
         throw new Error(await errorMessage(response));
@@ -1319,6 +1290,15 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
       URL.revokeObjectURL(url);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export request failed.');
+    }
+  }
+
+  async function previewIcdPhi() {
+    setError('');
+    try {
+      setPhiPreview(await postJson<PhiScanResponse>('/api/compliance/phi-preview', { text: inputText }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'PHI preview failed.');
     }
   }
 
@@ -1381,6 +1361,11 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
               <Button variant="contained" onClick={search} startIcon={<SearchIcon />}>Search</Button>
               <Button variant="outlined" onClick={refineInput} startIcon={<SearchIcon />}>Refine</Button>
               <Button variant="outlined" onClick={() => { updateInputText(''); setResult(null); setAutocompleteSuggestions([]); }} startIcon={<ClearAllIcon />}>Clear</Button>
+              <FormControlLabel
+                control={<Switch size="small" checked={redactIcdPhi} onChange={(event) => setRedactIcdPhi(event.target.checked)} />}
+                label="Redact PHI"
+              />
+              <Button variant="outlined" onClick={previewIcdPhi}>PHI Preview</Button>
               <Button variant="outlined" onClick={saveSearch} startIcon={<SaveIcon />}>Save</Button>
               {features.workspaces && <Button variant="outlined" onClick={saveIcdWorkspace} startIcon={<SaveIcon />}>Workspace</Button>}
             </Box>
@@ -1391,6 +1376,11 @@ function Icd10Module({ requireAuth, features }: { requireAuth: () => boolean; fe
             onChange={(event) => updateInputText(event.target.value)}
             placeholder="Enter diagnosis text, clinical note snippets, or multiple diagnoses on separate lines"
           />
+          {phiPreview && (
+            <Alert severity={phiPreview.suspicious ? 'warning' : 'success'}>
+              <PhiPreviewPanel preview={phiPreview} text={inputText} />
+            </Alert>
+          )}
           <Box className="sample-row">
             {['chest pain', 'diabetes with kidney disease', 'left ankle sprain initial encounter'].map((sample) => (
               <Button key={sample} size="small" variant="outlined" onClick={() => updateInputText(sample)}>{sample}</Button>

@@ -4,19 +4,19 @@ This roadmap lists the next practical work after the current MVP. Priorities are
 
 ## Phase 2: PHI, Audit, and Compliance Controls
 
-- [ ] Add audit log entity and service.
-- [ ] Capture audit events for login, logout, save, export, delete, import, and admin actions.
-- [ ] Add PHI-safe structured logging policy.
-- [ ] Prevent raw HL7, clinical note text, diagnosis text, and patient identifiers from being written to application logs by default.
-- [ ] Add PHI scanner middleware for saved content and exports.
-- [ ] Add redaction preview before saving/exporting suspicious PHI.
-- [ ] Encrypt saved payloads at rest with managed keys.
-- [ ] Add key rotation strategy.
-- [ ] Add user-controlled delete for saved records.
-- [ ] Add organization data-retention settings.
-- [ ] Add audit export for compliance review.
-- [ ] Add terms of use, privacy notice, and coding/disclaimer acknowledgment.
-- [ ] Add production HIPAA checklist and deployment guidance.
+- [x] Add audit log entity and service.
+- [x] Capture audit events for login, logout, save, export, delete, import, and admin actions.
+- [x] Add PHI-safe structured logging policy.
+- [x] Prevent raw HL7, clinical note text, diagnosis text, and patient identifiers from being written to application logs by default.
+- [x] Add PHI scanner middleware for saved content and exports.
+- [x] Add redaction preview before saving/exporting suspicious PHI.
+- [x] Encrypt saved payloads at rest with managed keys.
+- [x] Add key rotation strategy.
+- [x] Add user-controlled delete for saved records.
+- [x] Add organization data-retention settings.
+- [x] Add audit export for compliance review.
+- [x] Add terms of use, privacy notice, and coding/disclaimer acknowledgment.
+- [x] Add production HIPAA checklist and deployment guidance.
 
 ## Phase 3: Coding Data and Import Management
 

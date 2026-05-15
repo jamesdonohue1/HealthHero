@@ -6,6 +6,10 @@ import jakarta.validation.constraints.NotNull;
 
 public record Hl7Request(
         @NotBlank String message,
-        @NotNull ValidationMode mode
+        @NotNull ValidationMode mode,
+        Boolean redactPhi
 ) {
+    public Hl7Request(String message, ValidationMode mode) {
+        this(message, mode, false);
+    }
 }

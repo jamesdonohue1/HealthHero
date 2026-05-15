@@ -7,6 +7,10 @@ public record Icd10SearchRequest(
         @NotBlank @Size(max = 8000) String inputText,
         Integer resultLimit,
         Boolean includeClarifyingQuestions,
-        Boolean includeAiRefinement
+        Boolean includeAiRefinement,
+        Boolean redactPhi
 ) {
+    public Icd10SearchRequest(String inputText, Integer resultLimit, Boolean includeClarifyingQuestions, Boolean includeAiRefinement) {
+        this(inputText, resultLimit, includeClarifyingQuestions, includeAiRefinement, false);
+    }
 }

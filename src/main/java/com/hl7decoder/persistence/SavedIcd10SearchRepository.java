@@ -12,4 +12,6 @@ public interface SavedIcd10SearchRepository extends JpaRepository<SavedIcd10Sear
     List<SavedIcd10Search> findByOrganizationId(UUID organizationId);
 
     java.util.Optional<SavedIcd10Search> findByIdAndOrganizationId(UUID id, UUID organizationId);
+
+    List<SavedIcd10Search> findByOrganizationIdAndCreatedAtBefore(UUID organizationId, Instant cutoff);
 }

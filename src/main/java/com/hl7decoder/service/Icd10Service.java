@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hl7decoder.api.dto.icd10.Icd10AutocompleteRequest;
 import com.hl7decoder.api.dto.icd10.Icd10ExportRequest;
 import com.hl7decoder.api.dto.icd10.Icd10SearchRequest;
+import com.hl7decoder.model.compliance.AuditAction;
 import com.hl7decoder.model.icd10.Icd10AutocompleteResponse;
 import com.hl7decoder.model.icd10.Icd10AutocompleteSuggestion;
 import com.hl7decoder.model.icd10.Icd10DiagnosisGroup;
@@ -95,6 +96,9 @@ public class Icd10Service {
     private final SavedIcd10SearchRepository savedSearchRepository;
     private final Icd10CodeRepository icd10CodeRepository;
     private final ObjectMapper objectMapper;
+    private final PayloadEncryptionService encryptionService;
+    private final PhiScannerService phiScannerService;
+    private final AuditService auditService;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
     private final Map<String, Instant> pausedQueries = new ConcurrentHashMap<>();
 
@@ -103,12 +107,26 @@ public class Icd10Service {
                         SavedIcd10SearchRepository savedSearchRepository,
                         Icd10CodeRepository icd10CodeRepository,
                         ObjectMapper objectMapper,
+                        PayloadEncryptionService encryptionService,
+                        PhiScannerService phiScannerService,
+                        AuditService auditService,
                         @Value("${app.icd10.api-base-url:https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search}") String apiBaseUrl) {
         this.restClient = restClientBuilder.build();
         this.apiBaseUrl = apiBaseUrl;
         this.savedSearchRepository = savedSearchRepository;
         this.icd10CodeRepository = icd10CodeRepository;
         this.objectMapper = objectMapper;
+        this.encryptionService = encryptionService;
+        this.phiScannerService = phiScannerService;
+        this.auditService = auditService;
+    }
+
+    public Icd10Service(RestClient.Builder restClientBuilder,
+                        SavedIcd10SearchRepository savedSearchRepository,
+                        ObjectMapper objectMapper,
+                        String apiBaseUrl) {
+        this(restClientBuilder, savedSearchRepository, objectMapper,
+                new PayloadEncryptionService("local-dev-key-change-me", "v1"), new PhiScannerService(), null, apiBaseUrl);
     }
 
     public Icd10Service(RestClient.Builder restClientBuilder,
@@ -119,7 +137,8 @@ public class Icd10Service {
     }
 
     Icd10Service(RestClient.Builder restClientBuilder, String apiBaseUrl) {
-        this(restClientBuilder, null, null, new ObjectMapper().findAndRegisterModules(), apiBaseUrl);
+        this(restClientBuilder, null, new ObjectMapper().findAndRegisterModules(),
+                new PayloadEncryptionService("local-dev-key-change-me", "v1"), new PhiScannerService(), null, apiBaseUrl);
     }
 
     public Icd10SearchResponse search(Icd10SearchRequest request) {
@@ -181,12 +200,18 @@ public class Icd10Service {
     }
 
     public Icd10SavedSearchResponse save(Icd10SearchRequest request, UUID organizationId) {
+        return save(request, organizationId, null);
+    }
+
+    public Icd10SavedSearchResponse save(Icd10SearchRequest request, UUID organizationId, UUID userId) {
         ensureSavedSearchRepository();
-        Icd10SearchResponse search = search(request);
+        Icd10SearchRequest effectiveRequest = redactedSearchRequest(request);
+        Icd10SearchResponse search = search(effectiveRequest);
         UUID id = UUID.randomUUID();
         Instant expiresAt = Instant.now().plus(SAVE_TTL);
-        SavedIcd10Search saved = new SavedIcd10Search(id, Instant.now(), expiresAt, organizationId, writeSearch(search));
+        SavedIcd10Search saved = new SavedIcd10Search(id, Instant.now(), expiresAt, organizationId, encryptionService.encrypt(writeSearch(search)));
         savedSearchRepository.save(saved);
+        audit(AuditAction.SAVE, organizationId, userId, "ICD10_SEARCH", id.toString(), "saved ICD-10 search; redacted=" + Boolean.TRUE.equals(request.redactPhi()));
         return new Icd10SavedSearchResponse(id.toString(), expiresAt, search);
     }
 
@@ -223,27 +248,34 @@ public class Icd10Service {
     }
 
     public void deleteSaved(String id, UUID organizationId) {
+        deleteSaved(id, organizationId, null);
+    }
+
+    public void deleteSaved(String id, UUID organizationId, UUID userId) {
         ensureSavedSearchRepository();
         UUID uuid = UUID.fromString(id);
         if (organizationId == null) {
             savedSearchRepository.deleteById(uuid);
+            audit(AuditAction.DELETE, null, userId, "ICD10_SEARCH", id, "user-controlled saved ICD-10 delete");
             return;
         }
         SavedIcd10Search saved = savedSearchRepository.findByIdAndOrganizationId(uuid, organizationId)
                 .orElseThrow(() -> new EntityNotFoundException("Saved ICD-10 search not found."));
         savedSearchRepository.delete(saved);
+        audit(AuditAction.DELETE, organizationId, userId, "ICD10_SEARCH", id, "user-controlled saved ICD-10 delete");
     }
 
     public byte[] exportJson(Icd10ExportRequest request) {
+        Icd10ExportRequest effectiveRequest = redactedExportRequest(request);
         StringBuilder json = new StringBuilder();
         json.append("{\n");
-        json.append("  \"inputText\": ").append(jsonString(request.inputText())).append(",\n");
+        json.append("  \"inputText\": ").append(jsonString(effectiveRequest.inputText())).append(",\n");
         json.append("  \"selectedOnly\": ").append(Boolean.TRUE.equals(request.selectedOnly())).append(",\n");
         json.append("  \"selectedCodes\": [");
-        List<Icd10SelectedCode> selectedCodes = request.selectedCodes() == null ? List.of() : request.selectedCodes();
+        List<Icd10SelectedCode> selectedCodes = effectiveRequest.selectedCodes() == null ? List.of() : effectiveRequest.selectedCodes();
         Icd10SearchResponse search = Boolean.TRUE.equals(request.selectedOnly())
                 ? null
-                : search(new Icd10SearchRequest(request.inputText(), request.resultLimit(), true, false));
+                : search(new Icd10SearchRequest(effectiveRequest.inputText(), effectiveRequest.resultLimit(), true, false));
         for (int i = 0; i < selectedCodes.size(); i++) {
             Icd10SelectedCode code = selectedCodes.get(i);
             if (i > 0) {
@@ -316,7 +348,8 @@ public class Icd10Service {
     }
 
     public byte[] exportCsv(Icd10ExportRequest request) {
-        List<Icd10SelectedCode> selectedCodes = request.selectedCodes() == null ? List.of() : request.selectedCodes();
+        Icd10ExportRequest effectiveRequest = redactedExportRequest(request);
+        List<Icd10SelectedCode> selectedCodes = effectiveRequest.selectedCodes() == null ? List.of() : effectiveRequest.selectedCodes();
         StringBuilder csv = new StringBuilder("diagnosisText,code,description,longDescription,rank,score,matchPercentage,billable,chapter,queryTerm,fallbackMatch,source\n");
         if (Boolean.TRUE.equals(request.selectedOnly())) {
             for (Icd10SelectedCode code : selectedCodes) {
@@ -331,7 +364,7 @@ public class Icd10Service {
                         .append('\n');
             }
         } else {
-            Icd10SearchResponse search = search(new Icd10SearchRequest(request.inputText(), request.resultLimit(), true, false));
+            Icd10SearchResponse search = search(new Icd10SearchRequest(effectiveRequest.inputText(), effectiveRequest.resultLimit(), true, false));
             for (Icd10DiagnosisGroup group : search.diagnosisGroups()) {
                 for (Icd10SearchResult result : group.results()) {
                     csv.append(escape(group.diagnosisText())).append(',')
@@ -353,15 +386,16 @@ public class Icd10Service {
     }
 
     public byte[] exportText(Icd10ExportRequest request) {
+        Icd10ExportRequest effectiveRequest = redactedExportRequest(request);
         StringBuilder text = new StringBuilder();
         text.append("ICD-10 Search\n");
-        text.append("Input: ").append(request.inputText()).append("\n\n");
+        text.append("Input: ").append(effectiveRequest.inputText()).append("\n\n");
         if (Boolean.TRUE.equals(request.selectedOnly())) {
-            for (Icd10SelectedCode code : request.selectedCodes() == null ? List.<Icd10SelectedCode>of() : request.selectedCodes()) {
+            for (Icd10SelectedCode code : effectiveRequest.selectedCodes() == null ? List.<Icd10SelectedCode>of() : effectiveRequest.selectedCodes()) {
                 text.append(code.code()).append(" - ").append(code.description()).append('\n');
             }
         } else {
-            Icd10SearchResponse search = search(new Icd10SearchRequest(request.inputText(), request.resultLimit(), true, false));
+            Icd10SearchResponse search = search(new Icd10SearchRequest(effectiveRequest.inputText(), effectiveRequest.resultLimit(), true, false));
             text.append("Normalized: ").append(search.normalizedInput()).append("\n\n");
             for (Icd10DiagnosisGroup group : search.diagnosisGroups()) {
                 text.append(group.diagnosisText()).append('\n');
@@ -382,10 +416,11 @@ public class Icd10Service {
     }
 
     public byte[] exportPdf(Icd10ExportRequest request) {
+        Icd10ExportRequest effectiveRequest = redactedExportRequest(request);
         Icd10SearchResponse search = Boolean.TRUE.equals(request.selectedOnly())
                 ? null
-                : search(new Icd10SearchRequest(request.inputText(), request.resultLimit(), true, false));
-        List<Icd10SelectedCode> selectedCodes = request.selectedCodes() == null ? List.of() : request.selectedCodes();
+                : search(new Icd10SearchRequest(effectiveRequest.inputText(), effectiveRequest.resultLimit(), true, false));
+        List<Icd10SelectedCode> selectedCodes = effectiveRequest.selectedCodes() == null ? List.of() : effectiveRequest.selectedCodes();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Document document = new Document();
         try {
@@ -393,7 +428,7 @@ public class Icd10Service {
             document.open();
             document.add(new Paragraph("ICD-10 Search Report", FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18)));
             document.add(new Paragraph("Timestamp: " + Instant.now()));
-            document.add(new Paragraph("Search input: " + request.inputText()));
+            document.add(new Paragraph("Search input: " + effectiveRequest.inputText()));
             document.add(new Paragraph(DISCLAIMER));
             document.add(new Paragraph("Selected codes", FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12)));
             for (Icd10SelectedCode code : selectedCodes) {
@@ -900,9 +935,31 @@ public class Icd10Service {
             return new Icd10SavedSearchResponse(
                     saved.getId().toString(),
                     saved.getExpiresAt(),
-                    objectMapper.readValue(saved.getSearchJson(), Icd10SearchResponse.class));
+                    objectMapper.readValue(encryptionService.decrypt(saved.getSearchJson()), Icd10SearchResponse.class));
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Saved ICD-10 search could not be decoded", ex);
+        }
+    }
+
+    private Icd10SearchRequest redactedSearchRequest(Icd10SearchRequest request) {
+        if (!Boolean.TRUE.equals(request.redactPhi())) {
+            return request;
+        }
+        return new Icd10SearchRequest(phiScannerService.redact(request.inputText()), request.resultLimit(),
+                request.includeClarifyingQuestions(), request.includeAiRefinement(), false);
+    }
+
+    private Icd10ExportRequest redactedExportRequest(Icd10ExportRequest request) {
+        if (!Boolean.TRUE.equals(request.redactPhi())) {
+            return request;
+        }
+        return new Icd10ExportRequest(phiScannerService.redact(request.inputText()), request.resultLimit(),
+                request.selectedCodes(), request.selectedOnly(), false);
+    }
+
+    private void audit(AuditAction action, UUID organizationId, UUID userId, String resourceType, String resourceId, String details) {
+        if (auditService != null) {
+            auditService.record(action, organizationId, userId, resourceType, resourceId, true, details);
         }
     }
 
